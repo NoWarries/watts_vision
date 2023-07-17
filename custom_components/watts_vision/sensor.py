@@ -10,6 +10,8 @@ from homeassistant.const import TEMP_CELSIUS, TEMP_FAHRENHEIT
 from homeassistant.helpers.typing import HomeAssistantType
 from numpy import NaN
 
+from custom_components.watts_vision.central_unit import WattsVisionLastCommunicationSensor
+
 from .const import API_CLIENT, DOMAIN
 from .watts_api import WattsApi
 
@@ -57,7 +59,7 @@ async def async_setup_entry(
                         )
                     )
             sensors.append(
-                WattsVisionLastCommunicationSensor(
+              WattsVisionLastCommunicationSensor(
                     wattsClient,
                     smartHomes[y]["smarthome_id"]
                 )
@@ -268,50 +270,3 @@ class WattsVisionSetTemperatureSensor(SensorEntity):
         # except:
         #     self._available = False
         #     _LOGGER.exception("Error retrieving data.")
-
-
-class WattsVisionLastCommunicationSensor(SensorEntity):
-    def __init__(self, wattsClient: WattsApi, smartHome: str):
-        super().__init__()
-        self.client = wattsClient
-        self.smartHome = smartHome
-        self._name = "Last communication"
-        self._state = None
-        self._available = True
-
-    @property
-    def unique_id(self) -> str:
-        """Return the unique ID of the sensor."""
-        return "last_communication_" + self.smartHome
-
-    @property
-    def name(self) -> str:
-        """Return the name of the entity."""
-        return self._name
-
-    @property
-    def state(self) -> Optional[str]:
-        return self._state
-
-    @property
-    def device_info(self):
-        smartHome = self.client.getSmartHome(self.smartHome)
-        return {
-            "identifiers": {
-                # Serial numbers are unique identifiers within a specific domain
-                (DOMAIN, self.smartHome)
-            },
-            "manufacturer": "Watts",
-            "name": smartHome["label"] or "Central Unit",
-            "model": "BT-CT02-RF"
-        }
-
-    async def async_update(self):
-        data = await self.hass.async_add_executor_job(self.client.getLastCommunication, self.smartHome)
-
-        self._state = "{} days, {} hours, {} minutes and {} seconds.".format(
-            data["diffObj"]["days"],
-            data["diffObj"]["hours"],
-            data["diffObj"]["minutes"],
-            data["diffObj"]["seconds"]
-        )
