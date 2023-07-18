@@ -1,14 +1,17 @@
+"""Watts Vision sensor platform -- central unit."""
 from typing import Optional
-from custom_components.watts_vision.const import DOMAIN
-from custom_components.watts_vision.watts_api import WattsApi
+from .const import DOMAIN
+from .watts_api import WattsApi
 from homeassistant.components.sensor import SensorEntity
 
+
 class WattsVisionLastCommunicationSensor(SensorEntity):
-    def __init__(self, wattsClient: WattsApi, smartHome: str):
+    def __init__(self, wattsClient: WattsApi, smartHome: str, label: str):
         super().__init__()
         self.client = wattsClient
         self.smartHome = smartHome
-        self._name = "Last communication"
+        self._label = label
+        self._name = "Last communication " + self._label
         self._state = None
         self._available = True
 
@@ -28,14 +31,13 @@ class WattsVisionLastCommunicationSensor(SensorEntity):
 
     @property
     def device_info(self):
-        smartHome = self.client.getSmartHome(self.smartHome)
         return {
             "identifiers": {
                 # Serial numbers are unique identifiers within a specific domain
                 (DOMAIN, self.smartHome)
             },
             "manufacturer": "Watts",
-            "name": smartHome["label"] or "Central Unit",
+            "name": "Central Unit " + self._label,
             "model": "BT-CT02-RF"
         }
 
