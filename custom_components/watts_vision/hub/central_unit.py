@@ -4,8 +4,6 @@ from custom_components.watts_vision.watts_api import WattsApi
 from homeassistant.components.sensor import SensorEntity
 
 class WattsVisionLastCommunicationSensor(SensorEntity):
-    hub
-    
     def __init__(self, wattsClient: WattsApi, smartHome: str):
         super().__init__()
         self.client = wattsClient
