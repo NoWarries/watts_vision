@@ -30,7 +30,7 @@ class WattsApi:
             _LOGGER.exception("Authentication exception {exception}")
             return False
 
-    def getLoginToken(self, forcelogin=False):
+    def getLoginToken(self, forcelogin = False):
         """Get the access token for the Watts Smarthome API through login or refresh"""
 
         now = datetime.now()
@@ -122,8 +122,8 @@ class WattsApi:
         now = datetime.now()
 
         if (self._token_expires and self._token_expires <= now
-                or
-                self._refresh_expires_in and self._refresh_expires_in <= now
+            or
+            self._refresh_expires_in and self._refresh_expires_in <= now
         ):
             self.getLoginToken()
 
@@ -151,28 +151,41 @@ class WattsApi:
 
         return None
 
+    def setDevice(self, smarthome: str, deviceId: str, newState: str):
+        """Set specific device"""
+        for y in range(len(self._smartHomeData)):
+            if self._smartHomeData[y]["smarthome_id"] == smarthome:
+                for z in range(len(self._smartHomeData[y]["zones"])):
+                    for x in range(len(self._smartHomeData[y]["zones"][z]["devices"])):
+                        if self._smartHomeData[y]["zones"][z]["devices"][x]["id"] == deviceId:
+                            # If device is found, overwrite it with the new state
+                            self._smartHomeData[y]["zones"][z]["devices"][x] = newState
+                            return self._smartHomeData[y]["zones"][z]["devices"][x]
+
+        return None
+
     def pushTemperature(
-            self,
-            smarthome: str,
-            deviceID: str,
-            value: str,
-            gvMode: str,
-            firstTry: bool = True,
+        self,
+        smarthome: str,
+        deviceID: str,
+        value: str,
+        gvMode: str,
+        firstTry: bool = True,
     ):
         self._refresh_token_if_expired()
 
         headers = {"Authorization": f"Bearer {self._token}"}
         payload = {
-            "token": "true",
-            "context": "1",
-            "smarthome_id": smarthome,
-            "query[id_device]": deviceID,
-            "query[time_boost]": "0",
-            "query[gv_mode]": gvMode,
-            "query[nv_mode]": gvMode,
-            "peremption": "15000",
-            "lang": "nl_NL",
-        }
+                "token": "true",
+                "context": "1",
+                "smarthome_id": smarthome,
+                "query[id_device]": deviceID,
+                "query[time_boost]": "0",
+                "query[gv_mode]": gvMode,
+                "query[nv_mode]": gvMode,
+                "peremption": "15000",
+                "lang": "nl_NL",
+            }
         extrapayload = {}
         if gvMode == "0":
             extrapayload = {
