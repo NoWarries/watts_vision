@@ -13,8 +13,8 @@ This version includes the following:
 -   [x] Support for multiple Watts Vision accounts
 -   [x] API (un/re)loading
 -   [x] Account editing (reauthentication)
-
-
+-   [x] Battery tracking
+    - Will display 0% when battery is empty otherwise will display 100% when battery is full (technical limitation)
 ### Author
 - [pwesters](https://github.com/pwesters/watts_visio)
 
