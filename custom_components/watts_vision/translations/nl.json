@@ -19,7 +19,7 @@
   "options": {
     "error": {
       "invalid_auth": "Email en/of wachtwoord ongeldig.",
-      "unknown": "Er is een onverwachte uitzondering opgetreden.",
+      "unknown": "Er is een onverwachte fout opgetreden.",
       "username_exists": "Een account met het opgegeven mailadres is al toegevoegd."
     },
     "step": {
