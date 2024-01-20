@@ -2,39 +2,30 @@ import functools
 import logging
 from typing import Callable
 
-from homeassistant.components.climate import ClimateEntity
-from homeassistant.components.climate.const import (
-    CURRENT_HVAC_HEAT,
-    CURRENT_HVAC_COOL,
-    CURRENT_HVAC_IDLE,
-    CURRENT_HVAC_OFF,
-    HVAC_MODE_HEAT,
-    HVAC_MODE_COOL,
-    HVAC_MODE_OFF,
-    HVAC_MODE_AUTO,
-    SUPPORT_PRESET_MODE,
-    SUPPORT_TARGET_TEMPERATURE,
+from homeassistant.components.climate import (
+    ClimateEntity,
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
+    UnitOfTemperature
 )
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import TEMP_FAHRENHEIT
 from homeassistant.helpers.typing import HomeAssistantType
 
 from .const import (
     API_CLIENT,
     DOMAIN,
-    PRESET_BOOST,
-    PRESET_COMFORT,
-    PRESET_ECO,
-    PRESET_DEFROST,
     PRESET_OFF,
-    PRESET_PROGRAM,
     PRESET_MODE_MAP,
     PRESET_MODE_REVERSE_MAP,
     CONSIGNE_MAP,
 )
 from .watts_api import WattsApi
 
+
 _LOGGER = logging.getLogger(__name__)
+
 
 async def async_setup_entry(
     hass: HomeAssistantType,
@@ -94,15 +85,15 @@ class WattsThermostat(ClimateEntity):
 
     @property
     def supported_features(self):
-        return SUPPORT_TARGET_TEMPERATURE | SUPPORT_PRESET_MODE
+        return ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
 
     @property
     def temperature_unit(self) -> str:
-        return TEMP_FAHRENHEIT
+        return UnitOfTemperature.FAHRENHEIT
 
     @property
     def hvac_modes(self) -> list[str]:
-        return [HVAC_MODE_HEAT] + [HVAC_MODE_COOL] + [HVAC_MODE_OFF]
+        return [HVACMode.HEAT] + [HVACMode.COOL] + [HVACMode.OFF]
 
     @property
     def hvac_mode(self) -> str:
@@ -148,26 +139,26 @@ class WattsThermostat(ClimateEntity):
 
         if smartHomeDevice["heating_up"] == "0":
             if smartHomeDevice["gv_mode"] == "1":
-                self._attr_hvac_action = CURRENT_HVAC_OFF
+                self._attr_hvac_action = HVACAction.OFF
             else:
-                self._attr_hvac_action = CURRENT_HVAC_IDLE
+                self._attr_hvac_action = HVACAction.IDLE
         else:
             if smartHomeDevice["heat_cool"] == "1":
-                self._attr_hvac_action = CURRENT_HVAC_COOL
+                self._attr_hvac_action = HVACAction.COOLING
             else:
-                self._attr_hvac_action = CURRENT_HVAC_HEAT
+                self._attr_hvac_action = HVACAction.HEATING
 
         self._attr_preset_mode = PRESET_MODE_MAP[smartHomeDevice["gv_mode"]]
 
         if smartHomeDevice["gv_mode"] == "1":
-            self._attr_hvac_mode = HVAC_MODE_OFF
+            self._attr_hvac_mode = HVACMode.OFF
             self._attr_target_temperature = None
             targettemp = 0
         else:
             if smartHomeDevice["heat_cool"] == "1":
-                self._attr_hvac_mode = HVAC_MODE_COOL
+                self._attr_hvac_mode = HVACMode.COOL
             else:
-                self._attr_hvac_mode = HVAC_MODE_HEAT
+                self._attr_hvac_mode = HVACMode.HEAT
             consigne = CONSIGNE_MAP[smartHomeDevice["gv_mode"]]
             self._attr_target_temperature = float(smartHomeDevice[consigne]) / 10
             targettemp = self._attr_target_temperature
@@ -188,7 +179,7 @@ class WattsThermostat(ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode):
         """Set new target hvac mode."""
         mode = self._attr_extra_state_attributes["previous_gv_mode"]
-        if hvac_mode == HVAC_MODE_HEAT or hvac_mode == HVAC_MODE_COOL:
+        if hvac_mode == HVACMode.HEAT or hvac_mode == HVACMode.COOL:
             if mode == "1":
                 consigne = "Off"
                 value = 0
@@ -196,7 +187,7 @@ class WattsThermostat(ClimateEntity):
                 consigne = CONSIGNE_MAP[mode]
                 value = int(self._attr_extra_state_attributes[consigne])
 
-        if hvac_mode == HVAC_MODE_OFF:
+        if hvac_mode == HVACMode.OFF:
             self._attr_extra_state_attributes["previous_gv_mode"] = self._attr_extra_state_attributes["gv_mode"]
             mode = PRESET_MODE_REVERSE_MAP[PRESET_OFF]
             value = 0
@@ -207,7 +198,7 @@ class WattsThermostat(ClimateEntity):
             value = self._attr_max_temp
         if value < self._attr_min_temp:
             value = self._attr_min_temp
-        value = str(value*10)
+        value = str(value * 10)
 
         # reloading the devices may take some time, meanwhile set the new values manually
         smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
@@ -237,7 +228,7 @@ class WattsThermostat(ClimateEntity):
             value = self._attr_max_temp
         if value < self._attr_min_temp:
             value = self._attr_min_temp
-        value = str(value*10)
+        value = str(value * 10)
 
         _LOGGER.debug("Set preset mode b to {} for device {} with temperature {} ({} was {}) ".format(preset_mode, self._name, value, consigne, self._attr_extra_state_attributes[consigne]))
         # reloading the devices may take some time, meanwhile set the new values manually
@@ -265,7 +256,7 @@ class WattsThermostat(ClimateEntity):
             value = self._attr_max_temp
         if value < self._attr_min_temp:
             value = self._attr_min_temp
-        value = str(value*10)
+        value = str(value * 10)
         _LOGGER.debug("Set b-temperature to {} for device {} in mode {}".format(value, self._name, PRESET_MODE_MAP[gvMode]))
 
         # Get the smartHomeDevice

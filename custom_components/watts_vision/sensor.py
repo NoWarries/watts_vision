@@ -5,7 +5,8 @@ from typing import Callable, Optional
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import TEMP_CELSIUS, TEMP_FAHRENHEIT, PERCENTAGE
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
+
 from homeassistant.helpers.typing import HomeAssistantType
 from numpy import NaN
 
@@ -192,6 +193,7 @@ class WattsVisionBatterySensor(SensorEntity):
             "via_device": (DOMAIN, self.smartHome)
         }
 
+
 class WattsVisionTemperatureSensor(SensorEntity):
     """Representation of a Watts Vision temperature sensor."""
 
@@ -225,7 +227,7 @@ class WattsVisionTemperatureSensor(SensorEntity):
 
     @property
     def native_unit_of_measurement(self):
-        return TEMP_FAHRENHEIT
+        return UnitOfTemperature.FAHRENHEIT
 
     @property
     def device_info(self):
@@ -244,7 +246,7 @@ class WattsVisionTemperatureSensor(SensorEntity):
         # try:
         smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
         value = int(smartHomeDevice["temperature_air"])
-        if self.hass.config.units.temperature_unit == TEMP_CELSIUS:
+        if self.hass.config.units.temperature_unit == UnitOfTemperature.CELSIUS:
             self._state = round((value - 320) * 5 / 9 / 10, 1)
         else:
             self._state = value / 10
@@ -286,7 +288,7 @@ class WattsVisionSetTemperatureSensor(SensorEntity):
 
     @property
     def native_unit_of_measurement(self):
-        return TEMP_FAHRENHEIT
+        return UnitOfTemperature.FAHRENHEIT
 
     @property
     def device_info(self):
@@ -309,7 +311,7 @@ class WattsVisionSetTemperatureSensor(SensorEntity):
             self._state = NaN
         else:
             value = int(smartHomeDevice[CONSIGNE_MAP[smartHomeDevice["gv_mode"]]])
-            if self.hass.config.units.temperature_unit == TEMP_CELSIUS:
+            if self.hass.config.units.temperature_unit == UnitOfTemperature.CELSIUS:
                 self._state = round((value - 320) * 5 / 9 / 10, 1)
             else:
                 self._state = value / 10
