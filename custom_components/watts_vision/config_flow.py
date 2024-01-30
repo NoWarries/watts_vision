@@ -200,12 +200,21 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 )
 
             return self.async_create_entry(title="", data=user_input)
-
+        
+        interval = 300 
+        try:
+            interval = self.config_entry.data[CONF_SCAN_INTERVAL]
+        except:
+            LOGGER.warn("Something went wrong retrieving scan interval, attempting to restore")
+            interval = 300
+        finally: 
+            LOGGER.debug("Updating")
+            
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(CONF_SCAN_INTERVAL, description={"suggested_value": self.config_entry.data[CONF_SCAN_INTERVAL]}): int
+                    vol.Optional(CONF_SCAN_INTERVAL, description={"suggested_value": interval}): int
                 }
             ),
             errors=self.errors
