@@ -2,34 +2,42 @@
   "title": "Watts Vision",
   "config": {
     "error": {
-      "invalid_auth": "Email and/or password invalid.",
-      "unknown": "Unexpected exception occurred.",
-      "username_exists": "An account with the provided email is already being tracked."
+      "scan_interval_too_low": "Scan interval must be at least 300 seconds",
+      "scan_interval_too_high": "Scan interval must be at most 86400 seconds",
+      "missing_data": "We could not find the required data in your configuration",
+      "invalid_credentials": "The combination of username and password is not valid",
+      "unknown_authentication_error": "An unknown error occurred while authenticating"
     },
     "step": {
       "user": {
+        "title": "Authentication",
+        "description": "Enter your Watts Vision account credentials",
         "data": {
-          "username": "Email",
-          "password": "Password"
-        },
-        "description": "Connect to the Watts Vision API"
+          "username": "e-mail",
+          "password": "password"
+        }
+      },
+      "settings": {
+        "title": "Settings",
+        "description": "Configure your Watts Vision integration",
+        "data": {
+          "scan_interval": "refresh time (seconds)"
+        }
       }
     }
   },
   "options": {
     "error": {
-      "invalid_auth": "Email and/or password invalid.",
-      "unknown": "Unexpected exception occurred.",
-      "username_exists": "An account with the provided email is already being tracked."
+      "scan_interval_too_low": "Scan interval must be at least 300 seconds",
+      "scan_interval_too_high": "Scan interval must be at most 86400 seconds"
     },
     "step": {
-      "init": {
+      "user": {
+        "title": "Settings",
+        "description": "Configure your Watts Vision integration",
         "data": {
-          "username": "Email",
-          "password": "Password"
-        },
-        "title": "Watts Vision - Account reconfiguration",
-        "description": "Reconfigure account details and reconnect to the Watts Vision API"
+          "scan_interval": "refresh time (seconds)"
+        }
       }
     }
   }

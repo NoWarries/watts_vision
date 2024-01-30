@@ -2,34 +2,42 @@
   "title": "Watts Vision",
   "config": {
     "error": {
-      "invalid_auth": "Email en/of wachtwoord ongeldig.",
-      "unknown": "Er is een onverwachte fout opgetreden.",
-      "username_exists": "Een account met het opgegeven mailadres is al toegevoegd."
+      "scan_interval_too_low": "Verversingstijd moet minimaal 300 seconden zijn",
+      "scan_interval_too_high": "Verversingstijd mag maximaal 86400 seconden zijn",
+      "missing_data": "We konden de vereiste gegevens niet vinden in uw configuratie",
+      "invalid_credentials": "De combinatie van gebruikersnaam en wachtwoord is niet geldig",
+      "unknown_authentication_error": "Er is een onbekende fout opgetreden tijdens het authenticeren"
     },
     "step": {
       "user": {
+        "title": "Authenticatie",
+        "description": "Voer uw Watts Vision accountgegevens in",
         "data": {
-          "username": "Email",
-          "password": "Wachtwoord"
-        },
-        "description": "Verbinding maken met de Watts Visie API"
+          "username": "e-mail",
+          "password": "wachtwoord"
+        }
+      },
+      "settings": {
+        "title": "Instellingen",
+        "description": "Configureer uw Watts Vision integratie",
+        "data": {
+          "scan_interval": "verversingstijd (seconden)"
+        }
       }
     }
   },
   "options": {
     "error": {
-      "invalid_auth": "Email en/of wachtwoord ongeldig.",
-      "unknown": "Er is een onverwachte fout opgetreden.",
-      "username_exists": "Een account met het opgegeven mailadres is al toegevoegd."
+      "scan_interval_too_low": "Verversingstijd moet minimaal 300 seconden zijn",
+      "scan_interval_too_high": "Verversingstijd mag maximaal 86400 seconden zijn"
     },
     "step": {
-      "init": {
+      "user": {
+        "title": "Instellingen",
+        "description": "Configureer uw Watts Vision integratie",
         "data": {
-          "username": "Email",
-          "password": "Wachtwoord"
-        },
-        "title": "Watts Vision - Account herconfiguratie",
-        "description": "Accountgegevens opnieuw configureren en opnieuw verbinden met de Watts Visie API"
+          "scan_interval": "verversingstijd (seconden)"
+        }
       }
     }
   }
