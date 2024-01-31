@@ -1,4 +1,10 @@
-from datetime import timedelta
+"""
+This module contains the constants for the WattsVision integration.
+Constants are immutable variables which reference static values.
+This ensures consistency across the integration.
+"""
+
+import logging
 from homeassistant.components.climate.const import (
     PRESET_BOOST,
     PRESET_COMFORT,
@@ -8,6 +14,8 @@ from homeassistant.components.climate.const import (
 API_CLIENT = "api"
 
 DOMAIN = "watts_vision"
+
+LOGGER = logging.getLogger(__package__)
 
 PRESET_DEFROST = "Frost Protection"
 PRESET_OFF = "Off"
@@ -30,8 +38,6 @@ PRESET_MODE_REVERSE_MAP = {
     PRESET_BOOST: "4",
     PRESET_PROGRAM: "11",
 }
-
-SCAN_INTERVAL = timedelta(seconds=120)
 
 CONSIGNE_MAP = {
     "0" : "consigne_confort",
