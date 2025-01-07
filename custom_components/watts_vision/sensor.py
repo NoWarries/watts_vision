@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 
 from homeassistant.core import HomeAssistant
-from numpy import NaN
+from numpy import nan as npNaN
 
 from .const import API_CLIENT, DOMAIN, PRESET_MODE_MAP, CONSIGNE_MAP
 from .watts_api import WattsApi
