@@ -6,10 +6,12 @@ on:
     - cron:  "0 0 * * *"
   push:
     branches:
-      - main
+      - "main"
+      - "master"
   pull_request:
     branches:
-      - main
+      - "main"
+      - "master"
 
 permissions: {}
 
