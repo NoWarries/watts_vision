@@ -5,10 +5,11 @@ This ensures consistency across the integration.
 """
 
 import logging
+
 from homeassistant.components.climate.const import (
     PRESET_BOOST,
     PRESET_COMFORT,
-    PRESET_ECO
+    PRESET_ECO,
 )
 
 API_CLIENT = "api"
@@ -40,9 +41,9 @@ PRESET_MODE_REVERSE_MAP = {
 }
 
 CONSIGNE_MAP = {
-    "0" : "consigne_confort",
-    "2" : "consigne_hg",
-    "3" : "consigne_eco",
-    "4" : "consigne_boost",
-    "11" : "consigne_manuel",
+    "0": "consigne_confort",
+    "2": "consigne_hg",
+    "3": "consigne_eco",
+    "4": "consigne_boost",
+    "11": "consigne_manuel",
 }

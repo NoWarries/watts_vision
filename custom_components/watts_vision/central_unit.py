@@ -1,12 +1,15 @@
 """Watts Vision sensor platform -- central unit."""
-from typing import Optional
+
+from homeassistant.components.sensor import SensorEntity
+
 from .const import DOMAIN
 from .watts_api import WattsApi
-from homeassistant.components.sensor import SensorEntity
 
 
 class WattsVisionLastCommunicationSensor(SensorEntity):
-    def __init__(self, wattsClient: WattsApi, smartHome: str, label: str, mac_address: str):
+    def __init__(
+        self, wattsClient: WattsApi, smartHome: str, label: str, mac_address: str
+    ):
         super().__init__()
         self.client = wattsClient
         self.smartHome = smartHome
@@ -27,7 +30,7 @@ class WattsVisionLastCommunicationSensor(SensorEntity):
         return self._name
 
     @property
-    def state(self) -> Optional[str]:
+    def state(self) -> str | None:
         return self._state
 
     @property
@@ -40,17 +43,17 @@ class WattsVisionLastCommunicationSensor(SensorEntity):
             "manufacturer": "Watts",
             "name": "Central Unit " + self._label,
             "model": "BT-CT02-RF",
-            "connections": {
-                ("mac", self._mac_address)
-            }
+            "connections": {("mac", self._mac_address)},
         }
 
     async def async_update(self):
-        data = await self.hass.async_add_executor_job(self.client.getLastCommunication, self.smartHome)
+        data = await self.hass.async_add_executor_job(
+            self.client.getLastCommunication, self.smartHome
+        )
 
         self._state = "{} days, {} hours, {} minutes and {} seconds.".format(
             data["diffObj"]["days"],
             data["diffObj"]["hours"],
             data["diffObj"]["minutes"],
-            data["diffObj"]["seconds"]
+            data["diffObj"]["seconds"],
         )

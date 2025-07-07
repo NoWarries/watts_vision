@@ -1,18 +1,17 @@
 """Watts Vision sensor platform."""
-from datetime import timedelta
+
 import logging
-from typing import Callable, Optional
+from collections.abc import Callable
+from datetime import timedelta
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
-
 from homeassistant.core import HomeAssistant
-from numpy import nan as npNaN
 
-from .const import API_CLIENT, DOMAIN, PRESET_MODE_MAP, CONSIGNE_MAP
-from .watts_api import WattsApi
 from .central_unit import WattsVisionLastCommunicationSensor
+from .const import API_CLIENT, CONSIGNE_MAP, DOMAIN, PRESET_MODE_MAP
+from .watts_api import WattsApi
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,12 +19,9 @@ SCAN_INTERVAL = timedelta(seconds=120)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: Callable
+    hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: Callable
 ):
     """Set up the sensor platform."""
-
     wattsClient: WattsApi = hass.data[DOMAIN][API_CLIENT]
 
     smartHomes = wattsClient.getSmartHomes()
@@ -43,7 +39,7 @@ async def async_setup_entry(
                                     wattsClient,
                                     smartHomes[y]["smarthome_id"],
                                     smartHomes[y]["zones"][z]["devices"][x]["id"],
-                                    smartHomes[y]["zones"][z]["zone_label"]
+                                    smartHomes[y]["zones"][z]["zone_label"],
                                 )
                             )
                             sensors.append(
@@ -51,7 +47,7 @@ async def async_setup_entry(
                                     wattsClient,
                                     smartHomes[y]["smarthome_id"],
                                     smartHomes[y]["zones"][z]["devices"][x]["id"],
-                                    smartHomes[y]["zones"][z]["zone_label"]
+                                    smartHomes[y]["zones"][z]["zone_label"],
                                 )
                             )
                             sensors.append(
@@ -59,7 +55,7 @@ async def async_setup_entry(
                                     wattsClient,
                                     smartHomes[y]["smarthome_id"],
                                     smartHomes[y]["zones"][z]["devices"][x]["id"],
-                                    smartHomes[y]["zones"][z]["zone_label"]
+                                    smartHomes[y]["zones"][z]["zone_label"],
                                 )
                             )
                             sensors.append(
@@ -67,7 +63,7 @@ async def async_setup_entry(
                                     wattsClient,
                                     smartHomes[y]["smarthome_id"],
                                     smartHomes[y]["zones"][z]["devices"][x]["id"],
-                                    smartHomes[y]["zones"][z]["zone_label"]
+                                    smartHomes[y]["zones"][z]["zone_label"],
                                 )
                             )
             sensors.append(
@@ -75,7 +71,7 @@ async def async_setup_entry(
                     wattsClient,
                     smartHomes[y]["smarthome_id"],
                     smartHomes[y]["label"],
-                    smartHomes[y]["mac_address"]
+                    smartHomes[y]["mac_address"],
                 )
             )
 
@@ -106,7 +102,7 @@ class WattsVisionThermostatSensor(SensorEntity):
         return self._name
 
     @property
-    def state(self) -> Optional[str]:
+    def state(self) -> str | None:
         return self._state
 
     @property
@@ -128,7 +124,7 @@ class WattsVisionThermostatSensor(SensorEntity):
             "name": "Thermostat " + self.zone,
             "model": "BT-D03-RF",
             "via_device": (DOMAIN, self.smartHome),
-            "suggested_area": self.zone
+            "suggested_area": self.zone,
         }
 
     async def async_update(self):
@@ -144,6 +140,7 @@ class WattsVisionThermostatSensor(SensorEntity):
 
 class WattsVisionBatterySensor(SensorEntity):
     """Representation of the state of a Watts Vision device."""
+
     def __init__(self, wattsClient: WattsApi, smartHome: str, id: str, zone: str):
         super().__init__()
         self.client = wattsClient
@@ -153,7 +150,7 @@ class WattsVisionBatterySensor(SensorEntity):
         self._name = "Battery " + zone
         self._state = None
         self._available = None
-        
+
     @property
     def unique_id(self) -> str:
         """Return the unique ID of the sensor."""
@@ -167,18 +164,19 @@ class WattsVisionBatterySensor(SensorEntity):
     @property
     def device_class(self):
         return SensorDeviceClass.BATTERY
-   
+
     @property
     def native_unit_of_measurement(self):
         return PERCENTAGE
-   
+
     @property
     def state(self) -> int:
-        if self.client.getDevice(self.smartHome, self.id)['error_code'] == 1:
-            _LOGGER.warning('Battery is malfunctioning or (almost) empty for device %s ', self.id)
+        if self.client.getDevice(self.smartHome, self.id)["error_code"] == 1:
+            _LOGGER.warning(
+                "Battery is malfunctioning or (almost) empty for device %s ", self.id
+            )
             return 0
-        else:
-            return 100
+        return 100
 
     @property
     def device_info(self):
@@ -190,7 +188,7 @@ class WattsVisionBatterySensor(SensorEntity):
             "manufacturer": "Watts",
             "name": "Thermostat " + self.zone,
             "model": "BT-D03-RF",
-            "via_device": (DOMAIN, self.smartHome)
+            "via_device": (DOMAIN, self.smartHome),
         }
 
 
@@ -218,7 +216,7 @@ class WattsVisionTemperatureSensor(SensorEntity):
         return self._name
 
     @property
-    def state(self) -> Optional[str]:
+    def state(self) -> str | None:
         return self._state
 
     @property
@@ -239,7 +237,7 @@ class WattsVisionTemperatureSensor(SensorEntity):
             "manufacturer": "Watts",
             "name": "Thermostat " + self.zone,
             "model": "BT-D03-RF",
-            "via_device": (DOMAIN, self.smartHome)
+            "via_device": (DOMAIN, self.smartHome),
         }
 
     async def async_update(self):
@@ -279,7 +277,7 @@ class WattsVisionSetTemperatureSensor(SensorEntity):
         return self._name
 
     @property
-    def state(self) -> Optional[str]:
+    def state(self) -> str | None:
         return self._state
 
     @property
@@ -300,7 +298,7 @@ class WattsVisionSetTemperatureSensor(SensorEntity):
             "manufacturer": "Watts",
             "name": "Thermostat " + self.zone,
             "model": "BT-D03-RF",
-            "via_device": (DOMAIN, self.smartHome)
+            "via_device": (DOMAIN, self.smartHome),
         }
 
     async def async_update(self):
