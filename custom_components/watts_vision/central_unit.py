@@ -1,6 +1,5 @@
 """Watts Vision sensor platform -- central unit."""
 
-
 from homeassistant.components.sensor import SensorEntity
 
 from .const import DOMAIN

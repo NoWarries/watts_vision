@@ -143,11 +143,8 @@ class WattsApi:
             time.sleep(1 / 10)
             --timeout
 
-        if (
-            (self._token_expires
-            and self._token_expires <= now)
-            or (self._refresh_expires_in
-            and self._refresh_expires_in <= now)
+        if (self._token_expires and self._token_expires <= now) or (
+            self._refresh_expires_in and self._refresh_expires_in <= now
         ):
             self._refreshing_token = True
             self.getLoginToken()

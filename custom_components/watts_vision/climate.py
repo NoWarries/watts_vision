@@ -168,7 +168,9 @@ class WattsThermostat(ClimateEntity):
             self._attr_extra_state_attributes[consigne] = (
                 float(smartHomeDevice[consigne]) / 10
             )
-            logstring += f" {consigne[9:]}={self._attr_extra_state_attributes[consigne]}"
+            logstring += (
+                f" {consigne[9:]}={self._attr_extra_state_attributes[consigne]}"
+            )
         _LOGGER.debug(logstring)
 
         self._attr_extra_state_attributes["gv_mode"] = smartHomeDevice["gv_mode"]

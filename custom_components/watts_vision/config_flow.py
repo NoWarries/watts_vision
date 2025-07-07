@@ -1,6 +1,5 @@
 """This Modules contains the logic to register your watts vision account with HA"""
 
-
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
@@ -104,9 +103,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return False
         return True
 
-    async def async_step_settings(
-        self, user_input: dict | None = None
-    ) -> FlowResult:
+    async def async_step_settings(self, user_input: dict | None = None) -> FlowResult:
         """
         Handle the settings configuration step.
 

@@ -1,4 +1,3 @@
-
 from homeassistant.components.sensor import SensorEntity
 
 from custom_components.watts_vision.const import DOMAIN
