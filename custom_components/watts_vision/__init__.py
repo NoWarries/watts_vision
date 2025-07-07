@@ -1,13 +1,13 @@
 """Watts Vision Component."""
 
-from datetime import timedelta
 import logging
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_PASSWORD,
-    CONF_USERNAME,
     CONF_SCAN_INTERVAL,
+    CONF_USERNAME,
     Platform,
 )
 from homeassistant.core import HomeAssistant
@@ -48,7 +48,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # If scan interval is not found in config, set it to 300 seconds
     if CONF_SCAN_INTERVAL not in entry.data:
-        _LOGGER.warn("No scan interval found in config, defaulting to 300 seconds")
+        _LOGGER.warning("No scan interval found in config, defaulting to 300 seconds")
         interval = 300
     else:
         interval = entry.data.get(CONF_SCAN_INTERVAL)
