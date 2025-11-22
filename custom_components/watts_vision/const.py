@@ -28,6 +28,7 @@ PRESET_MODE_MAP = {
     "2": PRESET_DEFROST,
     "3": PRESET_ECO,
     "4": PRESET_BOOST,
+    "8": PRESET_PROGRAM,
     "11": PRESET_PROGRAM,
 }
 
