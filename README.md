@@ -45,5 +45,5 @@ A devcontainer is included for development purposes. This is a containerized dev
 1. Install the container extension for VSCode [here](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
 2. Install container runtime [here](https://docs.docker.com/get-docker/)
 3. Open folder in container through VSCode `> Dev Container: Open Folder in Container`
-4. Within this containerized environment run `> Tasks: Run Task` and select `> Run Home Assistant on port 9123` again through VSCode
-5. HA should be made available on port 9123 (http://127.0.0.1:9123/)
+4. Within this containerized environment run `> Tasks: Run Task` and select `> Run Home Assistant on port 8123` again through VSCode
+5. HA should be made available on port 8123 (http://127.0.0.1:8123/)
