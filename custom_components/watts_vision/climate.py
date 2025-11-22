@@ -68,7 +68,7 @@ class WattsThermostat(ClimateEntity):
         self.id = id
         self.zone = zone
         self.deviceID = deviceID
-        self._name = "Thermostat " + zone
+        self._name = zone + " Thermostat"
         self._available = True
         self._attr_extra_state_attributes = {"previous_gv_mode": "0"}
 

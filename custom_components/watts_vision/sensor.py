@@ -87,7 +87,7 @@ class WattsVisionThermostatSensor(SensorEntity):
         self.smartHome = smartHome
         self.id = id
         self.zone = zone
-        self._name = "Heating mode " + zone
+        self._name = zone + " Heating mode"
         self._state = None
         self._available = True
 
@@ -147,7 +147,7 @@ class WattsVisionBatterySensor(SensorEntity):
         self.smartHome = smartHome
         self.id = id
         self.zone = zone
-        self._name = "Battery " + zone
+        self._name = zone + " Battery"
         self._state = None
         self._available = None
 
@@ -201,7 +201,7 @@ class WattsVisionTemperatureSensor(SensorEntity):
         self.smartHome = smartHome
         self.id = id
         self.zone = zone
-        self._name = "Air temperature " + zone
+        self._name = zone + " Air temperature"
         self._state = None
         self._available = True
 
@@ -262,7 +262,7 @@ class WattsVisionSetTemperatureSensor(SensorEntity):
         self.smartHome = smartHome
         self.id = id
         self.zone = zone
-        self._name = "Target temperature " + zone
+        self._name = zone + " Target temperature"
         self._state = None
         self._available = True
 

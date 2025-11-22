@@ -51,7 +51,7 @@ class WattsVisionHeatingBinarySensor(BinarySensorEntity):
         self.smartHome = smartHome
         self.id = id
         self.zone = zone
-        self._name = "Heating " + zone
+        self._name = zone + " Heating"
         self._state: bool = False
         self._available = True
 
