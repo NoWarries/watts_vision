@@ -12,11 +12,11 @@ from homeassistant.core import HomeAssistant
 from .central_unit import WattsVisionLastCommunicationSensor
 from .const import (
     API_CLIENT,
-    CONSIGNE_MAP,
     DOMAIN,
     _AVAILABLE_HEAT_MODES,
     _AVAILABLE_TEMP_TYPES,
     _DEVICE_TO_MODE_TYPE,
+    _TEMP_TYPE_TO_DEVICE,
 )
 from .watts_api import WattsApi
 
@@ -381,7 +381,7 @@ class WattsVisionSetTemperatureSensor(SensorEntity):
         if smartHomeDevice["gv_mode"] == "1":
             self._state = NaN
         else:
-            value = int(smartHomeDevice[CONSIGNE_MAP[smartHomeDevice["gv_mode"]]])
+            value = int(smartHomeDevice[_TEMP_TYPE_TO_DEVICE[_DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].temp_type]])
             if self.hass.config.units.temperature_unit == UnitOfTemperature.CELSIUS:
                 self._state = round((value - 320) * 5 / 9 / 10, 1)
             else:
