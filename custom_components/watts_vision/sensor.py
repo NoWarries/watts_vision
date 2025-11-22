@@ -15,6 +15,7 @@ from .const import (
     CONSIGNE_MAP,
     DOMAIN,
     _AVAILABLE_HEAT_MODES,
+    _AVAILABLE_TEMP_TYPES,
     _DEVICE_TO_MODE_TYPE,
 )
 from .watts_api import WattsApi
@@ -42,6 +43,14 @@ async def async_setup_entry(
                         for x in range(len(smartHomes[y]["zones"][z]["devices"])):
                             sensors.append(
                                 WattsVisionPresetModeSensor(
+                                    wattsClient,
+                                    smartHomes[y]["smarthome_id"],
+                                    smartHomes[y]["zones"][z]["devices"][x]["id"],
+                                    smartHomes[y]["zones"][z]["zone_label"],
+                                )
+                            )
+                            sensors.append(
+                                WattsVisionTemperatureModeSensor(
                                     wattsClient,
                                     smartHomes[y]["smarthome_id"],
                                     smartHomes[y]["zones"][z]["devices"][x]["id"],
@@ -143,6 +152,64 @@ class WattsVisionPresetModeSensor(SensorEntity):
         #     self._available = False
         #     _LOGGER.exception("Error retrieving data.")
 
+class WattsVisionTemperatureModeSensor(SensorEntity):
+    """Representation of a Watts Vision thermostat."""
+
+    def __init__(self, wattsClient: WattsApi, smartHome: str, id: str, zone: str):
+        super().__init__()
+        self.client = wattsClient
+        self.smartHome = smartHome
+        self.id = id
+        self.zone = zone
+        self._name = zone + " Temperature mode"
+        self._state = None
+        self._available = True
+
+    @property
+    def unique_id(self) -> str:
+        """Return the unique ID of the sensor."""
+        return "temperature_mode_" + self.id
+
+    @property
+    def name(self) -> str:
+        """Return the name of the entity."""
+        return self._name
+
+    @property
+    def state(self) -> str | None:
+        return self._state
+
+    @property
+    def device_class(self):
+        return SensorDeviceClass.ENUM
+
+    @property
+    def options(self):
+        return [mode.value.capitalize() for mode in _AVAILABLE_TEMP_TYPES]
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {
+                # Serial numbers are unique identifiers within a specific domain
+                (DOMAIN, self.id)
+            },
+            "manufacturer": "Watts",
+            "name": "Thermostat " + self.zone,
+            "model": "BT-D03-RF",
+            "via_device": (DOMAIN, self.smartHome),
+            "suggested_area": self.zone,
+        }
+
+    async def async_update(self):
+        # try:
+        smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
+
+        self._state = _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].temp_type.value.capitalize()
+
+        # except:
+        #     self._available = False
+        #     _LOGGER.exception("Error retrieving data.")
 
 class WattsVisionBatterySensor(SensorEntity):
     """Representation of the state of a Watts Vision device."""
