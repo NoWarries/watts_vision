@@ -20,7 +20,9 @@ from .const import (
     PRESET_MODE_REVERSE_MAP,
     PRESET_OFF,
     _AVAILABLE_HEAT_MODES,
+    _AVAILABLE_TEMP_TYPES,
     _DEVICE_TO_MODE_TYPE,
+    _TEMP_TYPE_TO_DEVICE,
 )
 from .watts_api import WattsApi
 
@@ -161,12 +163,12 @@ class WattsThermostat(ClimateEntity):
                 self._attr_hvac_mode = HVACMode.COOL
             else:
                 self._attr_hvac_mode = HVACMode.HEAT
-            consigne = CONSIGNE_MAP[smartHomeDevice["gv_mode"]]
+            consigne = _TEMP_TYPE_TO_DEVICE[_DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].temp_type]
             self._attr_target_temperature = float(smartHomeDevice[consigne]) / 10
             targettemp = self._attr_target_temperature
 
         logstring = f"Update: {self._name} targettemp={targettemp}"
-        for consigne in CONSIGNE_MAP.values():
+        for consigne in [_TEMP_TYPE_TO_DEVICE[mode] for mode in _AVAILABLE_TEMP_TYPES]:
             self._attr_extra_state_attributes[consigne] = (
                 float(smartHomeDevice[consigne]) / 10
             )
