@@ -41,7 +41,7 @@ async def async_setup_entry(
                     if smartHomes[y]["zones"][z]["devices"] is not None:
                         for x in range(len(smartHomes[y]["zones"][z]["devices"])):
                             sensors.append(
-                                WattsVisionThermostatSensor(
+                                WattsVisionPresetModeSensor(
                                     wattsClient,
                                     smartHomes[y]["smarthome_id"],
                                     smartHomes[y]["zones"][z]["devices"][x]["id"],
@@ -84,7 +84,7 @@ async def async_setup_entry(
     async_add_entities(sensors, update_before_add=True)
 
 
-class WattsVisionThermostatSensor(SensorEntity):
+class WattsVisionPresetModeSensor(SensorEntity):
     """Representation of a Watts Vision thermostat."""
 
     def __init__(self, wattsClient: WattsApi, smartHome: str, id: str, zone: str):
@@ -93,7 +93,7 @@ class WattsVisionThermostatSensor(SensorEntity):
         self.smartHome = smartHome
         self.id = id
         self.zone = zone
-        self._name = zone + " Heating mode"
+        self._name = zone + " Preset mode"
         self._state = None
         self._available = True
 
