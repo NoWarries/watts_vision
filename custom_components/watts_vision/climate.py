@@ -19,6 +19,8 @@ from .const import (
     PRESET_MODE_MAP,
     PRESET_MODE_REVERSE_MAP,
     PRESET_OFF,
+    _AVAILABLE_HEAT_MODES,
+    _DEVICE_TO_MODE_TYPE,
 )
 from .watts_api import WattsApi
 
@@ -107,7 +109,7 @@ class WattsThermostat(ClimateEntity):
     @property
     def preset_modes(self) -> list[str]:
         """Return the available presets."""
-        return list(PRESET_MODE_MAP.values())
+        return [mode.value for mode in _AVAILABLE_HEAT_MODES]
 
     @property
     def preset_mode(self) -> str:
@@ -148,7 +150,7 @@ class WattsThermostat(ClimateEntity):
         else:
             self._attr_hvac_action = HVACAction.HEATING
 
-        self._attr_preset_mode = PRESET_MODE_MAP[smartHomeDevice["gv_mode"]]
+        self._attr_preset_mode = _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].heat_mode
 
         if smartHomeDevice["gv_mode"] == "1":
             self._attr_hvac_mode = HVACMode.OFF
@@ -175,10 +177,11 @@ class WattsThermostat(ClimateEntity):
 
         self._attr_extra_state_attributes["gv_mode"] = smartHomeDevice["gv_mode"]
         _LOGGER.debug(
-            "Update: {} air={} mode {} min {} max {}".format(
+            "Update: {} air={} heat_mode {} temp_type {} min {} max {}".format(
                 self._name,
                 self._attr_current_temperature,
-                PRESET_MODE_MAP[smartHomeDevice["gv_mode"]],
+                _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].heat_mode,
+                _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].temp_type,
                 self._attr_min_temp,
                 self._attr_max_temp,
             )

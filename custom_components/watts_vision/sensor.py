@@ -10,7 +10,13 @@ from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 
 from .central_unit import WattsVisionLastCommunicationSensor
-from .const import API_CLIENT, CONSIGNE_MAP, DOMAIN, PRESET_MODE_MAP
+from .const import (
+    API_CLIENT,
+    CONSIGNE_MAP,
+    DOMAIN,
+    _AVAILABLE_HEAT_MODES,
+    _DEVICE_TO_MODE_TYPE,
+)
 from .watts_api import WattsApi
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,7 +117,7 @@ class WattsVisionThermostatSensor(SensorEntity):
 
     @property
     def options(self):
-        return list(PRESET_MODE_MAP.values())
+        return [mode.value.capitalize() for mode in _AVAILABLE_HEAT_MODES]
 
     @property
     def device_info(self):
@@ -131,7 +137,7 @@ class WattsVisionThermostatSensor(SensorEntity):
         # try:
         smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
 
-        self._state = PRESET_MODE_MAP[smartHomeDevice["gv_mode"]]
+        self._state = _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].heat_mode.value.capitalize()
 
         # except:
         #     self._available = False
