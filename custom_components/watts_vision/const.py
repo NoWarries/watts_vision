@@ -46,5 +46,6 @@ CONSIGNE_MAP = {
     "2": "consigne_hg",
     "3": "consigne_eco",
     "4": "consigne_boost",
-    "11": "consigne_manuel",
+    "8": "consigne_confort",
+    "11": "consigne_eco",
 }
