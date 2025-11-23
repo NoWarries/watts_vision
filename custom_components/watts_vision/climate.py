@@ -18,7 +18,6 @@ from .const import (
     DOMAIN,
     PRESET_MODE_MAP,
     PRESET_MODE_REVERSE_MAP,
-    PRESET_OFF,
     _AVAILABLE_HEAT_MODES,
     _AVAILABLE_TEMP_TYPES,
     _DEVICE_TO_MODE_TYPE,
@@ -210,7 +209,7 @@ class WattsThermostat(ClimateEntity):
             self._attr_extra_state_attributes["previous_gv_mode"] = (
                 self._attr_extra_state_attributes["gv_mode"]
             )
-            mode = PRESET_MODE_REVERSE_MAP[PRESET_OFF]
+            mode = _HEAT_MODE_TO_DEVICE[HeatMode.OFF]
             consigne = "Off"
             value = 0
 
