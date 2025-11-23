@@ -112,31 +112,3 @@ _AVAILABLE_HEAT_MODES: list[HeatMode] = [
     HeatMode.BOOST,
     HeatMode.OFF,
 ]
-
-PRESET_MODE_MAP = {
-    "0": PRESET_COMFORT,
-    "1": PRESET_OFF,
-    "2": PRESET_DEFROST,
-    "3": PRESET_ECO,
-    "4": PRESET_BOOST,
-    "8": PRESET_PROGRAM,
-    "11": PRESET_PROGRAM,
-}
-
-PRESET_MODE_REVERSE_MAP = {
-    PRESET_COMFORT: "0",
-    PRESET_OFF: "1",
-    PRESET_DEFROST: "2",
-    PRESET_ECO: "3",
-    PRESET_BOOST: "4",
-    PRESET_PROGRAM: "11",
-}
-
-CONSIGNE_MAP = {
-    "0": "consigne_confort",
-    "2": "consigne_hg",
-    "3": "consigne_eco",
-    "4": "consigne_boost",
-    "8": "consigne_confort",
-    "11": "consigne_eco",
-}

@@ -9,15 +9,13 @@ from homeassistant.components.climate import (
     HVACMode,
     UnitOfTemperature,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
     API_CLIENT,
-    CONSIGNE_MAP,
     DOMAIN,
-    PRESET_MODE_MAP,
-    PRESET_MODE_REVERSE_MAP,
     _AVAILABLE_HEAT_MODES,
     _AVAILABLE_TEMP_TYPES,
     _DEVICE_TO_MODE_TYPE,
@@ -153,7 +151,7 @@ class WattsThermostat(ClimateEntity):
         else:
             self._attr_hvac_action = HVACAction.HEATING
 
-        self._attr_preset_mode = _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].heat_mode
+        self._attr_preset_mode = _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].heat_mode.value
 
         if smartHomeDevice["gv_mode"] == "1":
             self._attr_hvac_mode = HVACMode.OFF
@@ -274,30 +272,38 @@ class WattsThermostat(ClimateEntity):
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
         value = int(kwargs["temperature"])
-        gvMode = PRESET_MODE_REVERSE_MAP[self._attr_preset_mode]
+
+        # Get the smartHomeDevice
+        smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
+
+        gvMode = smartHomeDevice["gv_mode"]
+        if _DEVICE_TO_MODE_TYPE[gvMode].heat_mode == HeatMode.PROGRAM:
+            # This is not accepted by Watts!
+            raise HomeAssistantError(
+                f"Setting temperature is not supported in {_DEVICE_TO_MODE_TYPE[gvMode].heat_mode.value} mode."
+            )
+
+        temp_type = _DEVICE_TO_MODE_TYPE[gvMode].temp_type
 
         _LOGGER.debug(
-            f"Set a-temperature to {value} for device {self._name} in mode {PRESET_MODE_MAP[gvMode]} - min {self._attr_min_temp} max {self._attr_max_temp}"
+            f"Set a-temperature to {value} for device {self._name} in temp_type {temp_type} - min {self._attr_min_temp} max {self._attr_max_temp}"
         )
         value = min(value, self._attr_max_temp)
         value = max(value, self._attr_min_temp)
         value = str(value * 10)
         _LOGGER.debug(
-            f"Set b-temperature to {value} for device {self._name} in mode {PRESET_MODE_MAP[gvMode]}"
+            f"Set b-temperature to {value} for device {self._name} in mode {temp_type}"
         )
-
-        # Get the smartHomeDevice
-        smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
 
         # update its temp settings
         smartHomeDevice["consigne_manuel"] = value
-        smartHomeDevice[CONSIGNE_MAP[gvMode]] = value
+        smartHomeDevice[_TEMP_TYPE_TO_DEVICE[_DEVICE_TO_MODE_TYPE[gvMode].temp_type]] = value
 
         # Set the smartHomeDevice using the just altered SmartHomeDevice
         # self.client.setDevice(self.smartHome, self.id, smartHomeDevice)
 
         func = functools.partial(
-            self.client.pushTemperature, self.smartHome, self.deviceID, value, gvMode
+            self.client.pushTemperature, self.smartHome, self.deviceID, value, str(gvMode)
         )
 
         await self.hass.async_add_executor_job(func)
