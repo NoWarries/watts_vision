@@ -23,6 +23,8 @@ from .const import (
     _AVAILABLE_TEMP_TYPES,
     _DEVICE_TO_MODE_TYPE,
     _TEMP_TYPE_TO_DEVICE,
+    _HEAT_MODE_TO_DEVICE,
+    HeatMode,
 )
 from .watts_api import WattsApi
 
@@ -232,36 +234,41 @@ class WattsThermostat(ClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode."""
-        consigne = CONSIGNE_MAP[PRESET_MODE_REVERSE_MAP[preset_mode]]
-        if preset_mode != PRESET_OFF:
-            value = int(self._attr_extra_state_attributes[consigne])
+        heat_mode = HeatMode(preset_mode)
+        gv_mode = _HEAT_MODE_TO_DEVICE[heat_mode]
+
+        if heat_mode not in [HeatMode.OFF, HeatMode.PROGRAM]:
+            temp_type = _DEVICE_TO_MODE_TYPE[gv_mode].temp_type
+            consigne = _TEMP_TYPE_TO_DEVICE[temp_type]
+
+            value = float(self._attr_extra_state_attributes[consigne])
+            value = min(value, self._attr_max_temp)
+            value = max(value, self._attr_min_temp)
+            value = str(round(value * 10, 0))
+
+            _LOGGER.debug(
+                f"Set preset mode to {preset_mode} for device {self._name} with temperature {value} ({consigne} was {self._attr_extra_state_attributes[consigne]}) "
+            )
         else:
-            value = 0
+            value = "0"
             self._attr_extra_state_attributes["previous_gv_mode"] = (
                 self._attr_extra_state_attributes["gv_mode"]
             )
+            _LOGGER.debug(
+                f"Set preset mode to {preset_mode} for device {self._name} "
+            )
 
-        _LOGGER.debug(
-            f"Set preset mode a to {preset_mode} for device {self._name} with temperature {value} ({consigne} was {self._attr_extra_state_attributes[consigne]}) "
-        )
-        value = min(value, self._attr_max_temp)
-        value = max(value, self._attr_min_temp)
-        value = str(value * 10)
-
-        _LOGGER.debug(
-            f"Set preset mode b to {preset_mode} for device {self._name} with temperature {value} ({consigne} was {self._attr_extra_state_attributes[consigne]}) "
-        )
         # reloading the devices may take some time, meanwhile set the new values manually
         smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
         smartHomeDevice["consigne_manuel"] = value
-        smartHomeDevice["gv_mode"] = PRESET_MODE_REVERSE_MAP[preset_mode]
+        smartHomeDevice["gv_mode"] = gv_mode
 
         func = functools.partial(
             self.client.pushTemperature,
             self.smartHome,
             self.deviceID,
             value,
-            PRESET_MODE_REVERSE_MAP[preset_mode],
+            gv_mode,
         )
         await self.hass.async_add_executor_job(func)
 
