@@ -6,6 +6,12 @@
             "type": "shell",
             "command": "scripts/develop",
             "problemMatcher": []
+        },
+        {
+            "label": "Setup",
+            "type": "shell",
+            "command": "scripts/setup",
+            "problemMatcher": []
         }
     ]
 }

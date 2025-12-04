@@ -7,6 +7,6 @@ homeassistant:
 
 # https://www.home-assistant.io/integrations/logger/
 logger:
-  default: error
+  default: warn
   logs:
     custom_components.watts_vision: debug
