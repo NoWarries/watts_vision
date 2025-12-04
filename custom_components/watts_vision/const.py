@@ -28,6 +28,7 @@ PRESET_MODE_MAP = {
     "2": PRESET_DEFROST,
     "3": PRESET_ECO,
     "4": PRESET_BOOST,
+    "8": PRESET_PROGRAM,
     "11": PRESET_PROGRAM,
 }
 
@@ -45,5 +46,6 @@ CONSIGNE_MAP = {
     "2": "consigne_hg",
     "3": "consigne_eco",
     "4": "consigne_boost",
-    "11": "consigne_manuel",
+    "8": "consigne_confort",
+    "11": "consigne_eco",
 }
