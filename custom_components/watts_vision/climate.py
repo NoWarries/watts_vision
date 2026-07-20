@@ -9,16 +9,19 @@ from homeassistant.components.climate import (
     HVACMode,
     UnitOfTemperature,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
     API_CLIENT,
-    CONSIGNE_MAP,
     DOMAIN,
-    PRESET_MODE_MAP,
-    PRESET_MODE_REVERSE_MAP,
-    PRESET_OFF,
+    _AVAILABLE_HEAT_MODES,
+    _AVAILABLE_TEMP_TYPES,
+    _DEVICE_TO_MODE_TYPE,
+    _TEMP_TYPE_TO_DEVICE,
+    _HEAT_MODE_TO_DEVICE,
+    HeatMode,
 )
 from .watts_api import WattsApi
 
@@ -107,7 +110,7 @@ class WattsThermostat(ClimateEntity):
     @property
     def preset_modes(self) -> list[str]:
         """Return the available presets."""
-        return list(PRESET_MODE_MAP.values())
+        return [mode.value for mode in _AVAILABLE_HEAT_MODES]
 
     @property
     def preset_mode(self) -> str:
@@ -148,7 +151,7 @@ class WattsThermostat(ClimateEntity):
         else:
             self._attr_hvac_action = HVACAction.HEATING
 
-        self._attr_preset_mode = PRESET_MODE_MAP[smartHomeDevice["gv_mode"]]
+        self._attr_preset_mode = _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].heat_mode.value
 
         if smartHomeDevice["gv_mode"] == "1":
             self._attr_hvac_mode = HVACMode.OFF
@@ -159,12 +162,12 @@ class WattsThermostat(ClimateEntity):
                 self._attr_hvac_mode = HVACMode.COOL
             else:
                 self._attr_hvac_mode = HVACMode.HEAT
-            consigne = CONSIGNE_MAP[smartHomeDevice["gv_mode"]]
+            consigne = _TEMP_TYPE_TO_DEVICE[_DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].temp_type]
             self._attr_target_temperature = float(smartHomeDevice[consigne]) / 10
             targettemp = self._attr_target_temperature
 
         logstring = f"Update: {self._name} targettemp={targettemp}"
-        for consigne in CONSIGNE_MAP.values():
+        for consigne in [_TEMP_TYPE_TO_DEVICE[mode] for mode in _AVAILABLE_TEMP_TYPES]:
             self._attr_extra_state_attributes[consigne] = (
                 float(smartHomeDevice[consigne]) / 10
             )
@@ -175,10 +178,11 @@ class WattsThermostat(ClimateEntity):
 
         self._attr_extra_state_attributes["gv_mode"] = smartHomeDevice["gv_mode"]
         _LOGGER.debug(
-            "Update: {} air={} mode {} min {} max {}".format(
+            "Update: {} air={} heat_mode {} temp_type {} min {} max {}".format(
                 self._name,
                 self._attr_current_temperature,
-                PRESET_MODE_MAP[smartHomeDevice["gv_mode"]],
+                _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].heat_mode,
+                _DEVICE_TO_MODE_TYPE[smartHomeDevice["gv_mode"]].temp_type,
                 self._attr_min_temp,
                 self._attr_max_temp,
             )
@@ -196,14 +200,15 @@ class WattsThermostat(ClimateEntity):
                 consigne = "Off"
                 value = 0
             else:
-                consigne = CONSIGNE_MAP[mode]
+                consigne = _TEMP_TYPE_TO_DEVICE[_DEVICE_TO_MODE_TYPE[mode].temp_type]
                 value = int(self._attr_extra_state_attributes[consigne])
 
         if hvac_mode == HVACMode.OFF:
             self._attr_extra_state_attributes["previous_gv_mode"] = (
                 self._attr_extra_state_attributes["gv_mode"]
             )
-            mode = PRESET_MODE_REVERSE_MAP[PRESET_OFF]
+            mode = _HEAT_MODE_TO_DEVICE[HeatMode.OFF]
+            consigne = "Off"
             value = 0
 
         _LOGGER.debug(
@@ -226,66 +231,79 @@ class WattsThermostat(ClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode."""
-        consigne = CONSIGNE_MAP[PRESET_MODE_REVERSE_MAP[preset_mode]]
-        if preset_mode != PRESET_OFF:
-            value = int(self._attr_extra_state_attributes[consigne])
+        heat_mode = HeatMode(preset_mode)
+        gv_mode = _HEAT_MODE_TO_DEVICE[heat_mode]
+
+        if heat_mode not in [HeatMode.OFF, HeatMode.PROGRAM]:
+            temp_type = _DEVICE_TO_MODE_TYPE[gv_mode].temp_type
+            consigne = _TEMP_TYPE_TO_DEVICE[temp_type]
+
+            value = float(self._attr_extra_state_attributes[consigne])
+            value = min(value, self._attr_max_temp)
+            value = max(value, self._attr_min_temp)
+            value = str(round(value * 10, 0))
+
+            _LOGGER.debug(
+                f"Set preset mode to {preset_mode} for device {self._name} with temperature {value} ({consigne} was {self._attr_extra_state_attributes[consigne]}) "
+            )
         else:
-            value = 0
+            value = "0"
             self._attr_extra_state_attributes["previous_gv_mode"] = (
                 self._attr_extra_state_attributes["gv_mode"]
             )
+            _LOGGER.debug(
+                f"Set preset mode to {preset_mode} for device {self._name} "
+            )
 
-        _LOGGER.debug(
-            f"Set preset mode a to {preset_mode} for device {self._name} with temperature {value} ({consigne} was {self._attr_extra_state_attributes[consigne]}) "
-        )
-        value = min(value, self._attr_max_temp)
-        value = max(value, self._attr_min_temp)
-        value = str(value * 10)
-
-        _LOGGER.debug(
-            f"Set preset mode b to {preset_mode} for device {self._name} with temperature {value} ({consigne} was {self._attr_extra_state_attributes[consigne]}) "
-        )
         # reloading the devices may take some time, meanwhile set the new values manually
         smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
         smartHomeDevice["consigne_manuel"] = value
-        smartHomeDevice["gv_mode"] = PRESET_MODE_REVERSE_MAP[preset_mode]
+        smartHomeDevice["gv_mode"] = gv_mode
 
         func = functools.partial(
             self.client.pushTemperature,
             self.smartHome,
             self.deviceID,
             value,
-            PRESET_MODE_REVERSE_MAP[preset_mode],
+            gv_mode,
         )
         await self.hass.async_add_executor_job(func)
 
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
         value = int(kwargs["temperature"])
-        gvMode = PRESET_MODE_REVERSE_MAP[self._attr_preset_mode]
+
+        # Get the smartHomeDevice
+        smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
+
+        gvMode = smartHomeDevice["gv_mode"]
+        if _DEVICE_TO_MODE_TYPE[gvMode].heat_mode == HeatMode.PROGRAM:
+            # This is not accepted by Watts!
+            raise HomeAssistantError(
+                f"Setting temperature is not supported in {_DEVICE_TO_MODE_TYPE[gvMode].heat_mode.value} mode."
+            )
+
+        temp_type = _DEVICE_TO_MODE_TYPE[gvMode].temp_type
 
         _LOGGER.debug(
-            f"Set a-temperature to {value} for device {self._name} in mode {PRESET_MODE_MAP[gvMode]} - min {self._attr_min_temp} max {self._attr_max_temp}"
+            f"Set a-temperature to {value} for device {self._name} in temp_type {temp_type} - min {self._attr_min_temp} max {self._attr_max_temp}"
         )
         value = min(value, self._attr_max_temp)
         value = max(value, self._attr_min_temp)
         value = str(value * 10)
         _LOGGER.debug(
-            f"Set b-temperature to {value} for device {self._name} in mode {PRESET_MODE_MAP[gvMode]}"
+            f"Set b-temperature to {value} for device {self._name} in mode {temp_type}"
         )
-
-        # Get the smartHomeDevice
-        smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
 
         # update its temp settings
         smartHomeDevice["consigne_manuel"] = value
-        smartHomeDevice[CONSIGNE_MAP[gvMode]] = value
+        smartHomeDevice[_TEMP_TYPE_TO_DEVICE[_DEVICE_TO_MODE_TYPE[gvMode].temp_type]] = value
 
         # Set the smartHomeDevice using the just altered SmartHomeDevice
         # self.client.setDevice(self.smartHome, self.id, smartHomeDevice)
 
         func = functools.partial(
-            self.client.pushTemperature, self.smartHome, self.deviceID, value, gvMode
+            self.client.pushTemperature, self.smartHome, self.deviceID, value, str(gvMode)
         )
 
         await self.hass.async_add_executor_job(func)
