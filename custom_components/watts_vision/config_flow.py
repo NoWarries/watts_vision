@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -15,9 +16,11 @@ from .const import (
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
 )
-from .watts_api import WattsApi
+from .watts_api import WattsApi, WattsApiError, WattsAuthenticationError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from homeassistant.config_entries import ConfigFlowResult
 
 ACCOUNT_SCHEMA = vol.Schema(
@@ -36,6 +39,8 @@ SCAN_INTERVAL_SCHEMA = vol.Schema(
     }
 )
 
+REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
+
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the Watts Vision config flow."""
@@ -47,10 +52,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize a config flow."""
         self._account_data: dict[str, Any] | None = None
 
-    async def _async_credentials_are_valid(self, username: str, password: str) -> bool:
-        """Return whether the account credentials authenticate."""
+    async def _async_validate_credentials(self, username: str, password: str) -> None:
+        """Validate account credentials or raise a typed API error."""
         api = WattsApi(username, password)
-        return await self.hass.async_add_executor_job(api.test_authentication)
+        await self.hass.async_add_executor_job(
+            partial(api.get_login_token, force_login=True)
+        )
 
     async def async_step_user(
         self,
@@ -63,21 +70,66 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             password = str(user_input[CONF_PASSWORD])
             if not username or not password:
                 errors["base"] = "missing_data"
-            elif not await self._async_credentials_are_valid(username, password):
-                errors["base"] = "invalid_credentials"
             else:
-                await self.async_set_unique_id(username.casefold())
-                self._abort_if_unique_id_configured()
-                self._account_data = {
-                    CONF_USERNAME: username,
-                    CONF_PASSWORD: password,
-                }
-                return await self.async_step_settings()
+                try:
+                    await self._async_validate_credentials(username, password)
+                except WattsAuthenticationError:
+                    errors["base"] = "invalid_credentials"
+                except WattsApiError:
+                    errors["base"] = "cannot_connect"
+                else:
+                    await self.async_set_unique_id(username.casefold())
+                    self._abort_if_unique_id_configured()
+                    self._account_data = {
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: password,
+                    }
+                    return await self.async_step_settings()
 
         return self.async_show_form(
             step_id="user",
             data_schema=ACCOUNT_SCHEMA,
             errors=errors,
+        )
+
+    async def async_step_reauth(
+        self,
+        _entry_data: Mapping[str, Any],
+    ) -> ConfigFlowResult:
+        """Start reauthentication after an authentication failure."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Validate replacement credentials and update the existing entry."""
+        reauth_entry = self._get_reauth_entry()
+        username = str(reauth_entry.data[CONF_USERNAME])
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            password = str(user_input[CONF_PASSWORD])
+            if not password:
+                errors["base"] = "missing_data"
+            else:
+                try:
+                    await self._async_validate_credentials(username, password)
+                except WattsAuthenticationError:
+                    errors["base"] = "invalid_credentials"
+                except WattsApiError:
+                    errors["base"] = "cannot_connect"
+                else:
+                    return self.async_update_reload_and_abort(
+                        reauth_entry,
+                        data_updates={CONF_PASSWORD: password},
+                    )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=REAUTH_SCHEMA,
+            errors=errors,
+            description_placeholders={CONF_USERNAME: username},
         )
 
     async def async_step_settings(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from http import HTTPStatus
 from typing import Any
 
 import requests
@@ -17,6 +18,13 @@ AUTH_URL = (
 )
 API_URL = "https://smarthome.wattselectronics.com/api/v0.1/human"
 REQUEST_TIMEOUT = 30
+AUTH_REJECTION_STATUSES = frozenset(
+    {
+        HTTPStatus.BAD_REQUEST,
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+    }
+)
 
 type JsonObject = dict[str, Any]
 
@@ -42,14 +50,6 @@ class WattsApi:
         self._refresh_expires_at = 0.0
         self._refresh_lock = threading.Lock()
         self._smart_home_data: list[JsonObject] = []
-
-    def test_authentication(self) -> bool:
-        """Return whether the configured credentials can authenticate."""
-        try:
-            self.get_login_token(force_login=True)
-        except WattsApiError:
-            return False
-        return True
 
     def get_login_token(self, *, force_login: bool = False) -> str:
         """Return a valid access token, using login or refresh as needed."""
@@ -87,15 +87,23 @@ class WattsApi:
             raise WattsApiError(msg) from err
 
         if response.status_code != requests.codes.ok:
-            if payload["grant_type"] == "refresh_token":
+            authentication_rejected = response.status_code in AUTH_REJECTION_STATUSES
+            if payload["grant_type"] == "refresh_token" and authentication_rejected:
                 _LOGGER.warning(
                     "Token refresh failed; retrying with account credentials"
                 )
                 return self.get_login_token(force_login=True)
+            if authentication_rejected:
+                msg = (
+                    "Watts Vision authentication failed with status "
+                    f"{response.status_code}"
+                )
+                raise WattsAuthenticationError(msg)
             msg = (
-                f"Watts Vision authentication failed with status {response.status_code}"
+                "Watts Vision authentication service returned status "
+                f"{response.status_code}"
             )
-            raise WattsAuthenticationError(msg)
+            raise WattsApiError(msg)
 
         response_data = self._json_object(response)
         try:

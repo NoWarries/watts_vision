@@ -62,6 +62,8 @@ async def async_setup_entry(
         """Refresh cached device data."""
         try:
             await hass.async_add_executor_job(client.reload_devices)
+        except WattsAuthenticationError:
+            entry.async_start_reauth(hass)
         except WattsApiError:
             _LOGGER.exception("Unable to refresh Watts Vision devices")
 

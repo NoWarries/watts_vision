@@ -1,7 +1,11 @@
 {
   "title": "Watts Vision",
   "config": {
+    "abort": {
+      "reauth_successful": "Re-authentication was successful"
+    },
     "error": {
+      "cannot_connect": "Unable to connect to Watts Vision",
       "scan_interval_too_low": "Scan interval must be at least 300 seconds",
       "scan_interval_too_high": "Scan interval must be at most 86400 seconds",
       "missing_data": "We could not find the required data in your configuration",
@@ -22,6 +26,13 @@
         "description": "Configure your Watts Vision integration",
         "data": {
           "scan_interval": "refresh time (seconds)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Watts Vision",
+        "description": "Enter the current password for {username}",
+        "data": {
+          "password": "password"
         }
       }
     }

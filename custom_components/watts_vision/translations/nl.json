@@ -1,7 +1,11 @@
 {
   "title": "Watts Vision",
   "config": {
+    "abort": {
+      "reauth_successful": "Opnieuw verifiëren is gelukt"
+    },
     "error": {
+      "cannot_connect": "Kan geen verbinding maken met Watts Vision",
       "scan_interval_too_low": "Verversingstijd moet minimaal 300 seconden zijn",
       "scan_interval_too_high": "Verversingstijd mag maximaal 86400 seconden zijn",
       "missing_data": "We konden de vereiste gegevens niet vinden in uw configuratie",
@@ -22,6 +26,13 @@
         "description": "Configureer uw Watts Vision integratie",
         "data": {
           "scan_interval": "verversingstijd (seconden)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Watts Vision opnieuw verifiëren",
+        "description": "Voer het huidige wachtwoord voor {username} in",
+        "data": {
+          "password": "wachtwoord"
         }
       }
     }
