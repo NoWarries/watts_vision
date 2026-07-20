@@ -1,0 +1,28 @@
+meta {
+  name: List smart homes
+  type: http
+  seq: 2
+}
+
+post {
+  url: https://smarthome.wattselectronics.com/api/v0.1/human/user/read/
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{accessToken}}
+}
+
+body:form-urlencoded {
+  token: true
+  email: {{process.env.WATTS_USERNAME}}
+  lang: nl_NL
+}
+
+script:post-response {
+  const smartHomes = res.body.data?.smarthomes;
+  if (Array.isArray(smartHomes) && smartHomes[0]?.smarthome_id) {
+    bru.setVar("smartHomeId", smartHomes[0].smarthome_id);
+  }
+}

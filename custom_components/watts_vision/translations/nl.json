@@ -32,12 +32,39 @@
       "scan_interval_too_high": "Verversingstijd mag maximaal 86400 seconden zijn"
     },
     "step": {
-      "user": {
+      "init": {
         "title": "Instellingen",
         "description": "Configureer uw Watts Vision integratie",
         "data": {
           "scan_interval": "verversingstijd (seconden)"
         }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "heating": {
+        "name": "Verwarming"
+      }
+    },
+    "sensor": {
+      "air_temperature": {
+        "name": "Luchttemperatuur"
+      },
+      "battery": {
+        "name": "Batterij"
+      },
+      "last_communication": {
+        "name": "Laatste communicatie"
+      },
+      "preset_mode": {
+        "name": "Voorinstelling"
+      },
+      "target_temperature": {
+        "name": "Doeltemperatuur"
+      },
+      "temperature_mode": {
+        "name": "Temperatuurmodus"
       }
     }
   }

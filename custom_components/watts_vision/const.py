@@ -1,32 +1,33 @@
-"""
-This module contains the constants for the WattsVision integration.
-Constants are immutable variables which reference static values.
-This ensures consistency across the integration.
-"""
+"""Constants for the Watts Vision integration."""
+
+from __future__ import annotations
 
 import logging
-from typing import NamedTuple
 from enum import Enum
+from typing import NamedTuple
 
 from homeassistant.components.climate.const import (
-    PRESET_NONE,
     PRESET_BOOST,
     PRESET_COMFORT,
     PRESET_ECO,
+    PRESET_NONE,
 )
-
-API_CLIENT = "api"
 
 DOMAIN = "watts_vision"
 
 LOGGER = logging.getLogger(__package__)
 
+DEFAULT_SCAN_INTERVAL = 300
+MIN_SCAN_INTERVAL = 300
+MAX_SCAN_INTERVAL = 86_400
+
 PRESET_DEFROST = "Frost Protection"
 PRESET_OFF = "Off"
 PRESET_PROGRAM = "Program"
 
+
 class HeatMode(Enum):
-    """Enum of available heating modes."""
+    """Available heating modes."""
 
     OFF = PRESET_OFF
     FROST = PRESET_DEFROST
@@ -35,8 +36,9 @@ class HeatMode(Enum):
     ECO = PRESET_ECO
     BOOST = PRESET_BOOST
 
+
 class TempType(Enum):
-    """Enum of available temperatures modes."""
+    """Available temperature modes."""
 
     NONE = PRESET_NONE
     FROST = PRESET_DEFROST
@@ -47,26 +49,31 @@ class TempType(Enum):
     TARGET = "Target"
     MANUAL = "Manual"
 
-class _ModeInfo(NamedTuple):
+
+class ModeInfo(NamedTuple):
+    """Heating and temperature mode pair."""
+
     heat_mode: HeatMode
     temp_type: TempType
 
-_DEVICE_TO_MODE_TYPE: dict[str, _ModeInfo] = {
-    "0": _ModeInfo(HeatMode.COMFORT, TempType.COMFORT),
-    "1": _ModeInfo(HeatMode.OFF, TempType.NONE),
-    "2": _ModeInfo(HeatMode.FROST, TempType.FROST),
-    "3": _ModeInfo(HeatMode.ECO, TempType.ECO),
-    "4": _ModeInfo(HeatMode.BOOST, TempType.BOOST),
-    # "5": ModeInfo("fan", None),
-    # "6": ModeInfo("fan-disabled", None),
-    "8": _ModeInfo(HeatMode.PROGRAM, TempType.COMFORT),
-    "11": _ModeInfo(HeatMode.PROGRAM, TempType.ECO),
-    # "13": ModeInfo("program", None),
-    # "15": ModeInfo("manual", "manual"),
-    # "16": ModeInfo("program", "boost"),
+
+DEVICE_TO_MODE_TYPE: dict[str, ModeInfo] = {
+    "0": ModeInfo(HeatMode.COMFORT, TempType.COMFORT),
+    "1": ModeInfo(HeatMode.OFF, TempType.NONE),
+    "2": ModeInfo(HeatMode.FROST, TempType.FROST),
+    "3": ModeInfo(HeatMode.ECO, TempType.ECO),
+    "4": ModeInfo(HeatMode.BOOST, TempType.BOOST),
+    "8": ModeInfo(HeatMode.PROGRAM, TempType.COMFORT),
+    "11": ModeInfo(HeatMode.PROGRAM, TempType.ECO),
 }
 
-_HEAT_MODE_TO_DEVICE: dict[HeatMode, str] = {
+# - 5: fan
+# - 6: fan disabled
+# - 13: program with no known temperature type
+# - 15: manual temperature
+# - 16: program using the boost temperature
+
+HEAT_MODE_TO_DEVICE: dict[HeatMode, str] = {
     HeatMode.ECO: "3",
     HeatMode.FROST: "2",
     HeatMode.COMFORT: "0",
@@ -75,14 +82,7 @@ _HEAT_MODE_TO_DEVICE: dict[HeatMode, str] = {
     HeatMode.OFF: "1",
 }
 
-_HEAT_MODE_TO_WRITABLE_TEMP_TYPE: dict[HeatMode, TempType] = {
-    HeatMode.ECO: TempType.ECO,
-    HeatMode.FROST: TempType.FROST,
-    HeatMode.COMFORT: TempType.COMFORT,
-    HeatMode.BOOST: TempType.BOOST,
-}
-
-_TEMP_TYPE_TO_DEVICE: dict[TempType, str] = {
+TEMP_TYPE_TO_DEVICE: dict[TempType, str] = {
     TempType.ECO: "consigne_eco",
     TempType.FROST: "consigne_hg",
     TempType.COMFORT: "consigne_confort",
@@ -91,24 +91,19 @@ _TEMP_TYPE_TO_DEVICE: dict[TempType, str] = {
     TempType.BOOST: "consigne_boost",
 }
 
-_AVAILABLE_TEMP_TYPES: list[TempType] = [
+AVAILABLE_TEMP_TYPES: tuple[TempType, ...] = (
     TempType.ECO,
     TempType.FROST,
     TempType.COMFORT,
     TempType.CURRENT,
     TempType.BOOST,
-]
+)
 
-_READONLY_TEMP_TYPES: list[TempType] = [
-    TempType.CURRENT,
-    TempType.TARGET,
-]
-
-_AVAILABLE_HEAT_MODES: list[HeatMode] = [
+AVAILABLE_HEAT_MODES: tuple[HeatMode, ...] = (
     HeatMode.COMFORT,
     HeatMode.ECO,
     HeatMode.FROST,
     HeatMode.PROGRAM,
     HeatMode.BOOST,
     HeatMode.OFF,
-]
+)

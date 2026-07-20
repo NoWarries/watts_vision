@@ -1,0 +1,62 @@
+name: "🔍 Continuous Integration"
+
+on:
+  push:
+    branches:
+      - "main"
+      - "master"
+      - "acceptance"
+  pull_request:
+    branches:
+      - "main"
+      - "master"
+      - "acceptance"
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: "🧹 Ruff"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "⌛ Check out repository"
+        uses: actions/checkout@v6.0.2
+
+      - name: "🐍 Install uv and Python"
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.14.2"
+
+      - name: "📦 Verify lockfile"
+        run: uv lock --check
+
+      - name: "🧹 Run lint check"
+        run: uv run --locked ruff check .
+
+      - name: "🧹 Run formatting check"
+        run: uv run --locked ruff format . --check
+
+  hassfest:
+    # https://developers.home-assistant.io/blog/2020/04/16/hassfest/
+    name: "🏠 Official Hassfest manifest validation"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "⌛ Check out repository"
+        uses: actions/checkout@v6.0.2
+
+      - name: "✅ Run Hassfest validation"
+        uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    # https://github.com/hacs/action
+    name: "📦 HACS validation"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "✅ Run HACS validation"
+        uses: hacs/action@main
+        with:
+          category: integration
+          # Remove this once the integration has images in home-assistant/brands.
+          ignore: brands

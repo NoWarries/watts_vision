@@ -1,7 +1,10 @@
-"""Watts Vision Component."""
+"""Watts Vision integration setup."""
+
+from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -10,60 +13,109 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_interval
 
-from .const import API_CLIENT, DOMAIN
-from .watts_api import WattsApi
+from .const import DEFAULT_SCAN_INTERVAL
+from .watts_api import WattsApi, WattsApiError, WattsAuthenticationError
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.CLIMATE]
+PLATFORMS: tuple[Platform, ...] = (
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.CLIMATE,
+)
+CONFIG_ENTRY_VERSION = 1
+CONFIG_ENTRY_MINOR_VERSION = 2
+
+type WattsVisionConfigEntry = ConfigEntry[WattsApi]
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: WattsVisionConfigEntry,
+) -> bool:
     """Set up Watts Vision from a config entry."""
-    _LOGGER.debug("Set up Watts Vision")
-    hass.data.setdefault(DOMAIN, {})
-
-    client = WattsApi(hass, entry.data[CONF_USERNAME], entry.data[CONF_PASSWORD])
+    client = WattsApi(entry.data[CONF_USERNAME], entry.data[CONF_PASSWORD])
 
     try:
-        await hass.async_add_executor_job(client.getLoginToken)
-    except Exception as exception:  # pylint: disable=broad-except
-        _LOGGER.exception(exception)
-        return False
+        await hass.async_add_executor_job(client.get_login_token)
+        await hass.async_add_executor_job(client.load_data)
+    except WattsAuthenticationError as err:
+        raise ConfigEntryAuthFailed from err
+    except WattsApiError as err:
+        raise ConfigEntryNotReady from err
 
-    await hass.async_add_executor_job(client.loadData)
+    entry.runtime_data = client
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    hass.data[DOMAIN][API_CLIENT] = client
-
-    hass.async_create_task(
-        hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    scan_interval = entry.options.get(
+        CONF_SCAN_INTERVAL,
+        entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
     )
 
-    async def refresh_devices(event_time):
-        _LOGGER.debug("Refreshing devices")
-        await hass.async_add_executor_job(client.reloadDevices)
+    async def async_refresh_devices(_now: datetime) -> None:
+        """Refresh cached device data."""
+        try:
+            await hass.async_add_executor_job(client.reload_devices)
+        except WattsApiError:
+            _LOGGER.exception("Unable to refresh Watts Vision devices")
 
-    # If scan interval is not found in config, set it to 300 seconds
-    if CONF_SCAN_INTERVAL not in entry.data:
-        _LOGGER.warning("No scan interval found in config, defaulting to 300 seconds")
-        interval = 300
-    else:
-        interval = entry.data.get(CONF_SCAN_INTERVAL)
-
-    SCAN_INTERVAL = timedelta(seconds=interval)
-
-    _LOGGER.debug("Setting up refresh interval to %s", SCAN_INTERVAL)
-    async_track_time_interval(hass, refresh_devices, SCAN_INTERVAL)
-
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            async_refresh_devices,
+            timedelta(seconds=scan_interval),
+        )
+    )
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    _LOGGER.debug("Unloading Watts Vision")
-    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(API_CLIENT)
-    return unload_ok
+async def async_unload_entry(
+    hass: HomeAssistant,
+    entry: WattsVisionConfigEntry,
+) -> bool:
+    """Unload a Watts Vision config entry."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_migrate_entry(
+    hass: HomeAssistant,
+    entry: WattsVisionConfigEntry,
+) -> bool:
+    """Migrate legacy Watts Vision config entries."""
+    if (
+        entry.version != CONFIG_ENTRY_VERSION
+        or entry.minor_version >= CONFIG_ENTRY_MINOR_VERSION
+    ):
+        return True
+
+    data = dict(entry.data)
+    options = dict(entry.options)
+    options.setdefault(
+        CONF_SCAN_INTERVAL,
+        data.pop(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+    )
+
+    unique_id = entry.unique_id
+    candidate_unique_id = str(data[CONF_USERNAME]).strip().casefold()
+    duplicate_unique_id = any(
+        other.entry_id != entry.entry_id and other.unique_id == candidate_unique_id
+        for other in hass.config_entries.async_entries(entry.domain)
+    )
+    if unique_id is None and not duplicate_unique_id:
+        unique_id = candidate_unique_id
+
+    hass.config_entries.async_update_entry(
+        entry,
+        data=data,
+        options=options,
+        unique_id=unique_id,
+        minor_version=CONFIG_ENTRY_MINOR_VERSION,
+    )
+    _LOGGER.info("Migrated Watts Vision config entry to version 1.2")
+    return True

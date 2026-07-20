@@ -1,0 +1,11 @@
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.7.2
+    environment:
+      TZ: ${TZ:-Europe/Amsterdam}
+    ports:
+      - "127.0.0.1:8123:8123"
+    volumes:
+      - ./config:/config
+      - ./custom_components/watts_vision:/config/custom_components/watts_vision:ro
+    restart: unless-stopped

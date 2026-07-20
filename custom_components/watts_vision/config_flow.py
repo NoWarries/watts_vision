@@ -1,273 +1,133 @@
-"""This Modules contains the logic to register your watts vision account with HA"""
+"""Config and options flows for Watts Vision."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 
-from .const import DOMAIN, LOGGER
+from .const import (
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
+)
 from .watts_api import WattsApi
 
-# Schema for registering an account with the WattsVision API
-register_schema = vol.Schema(
-    {vol.Required(CONF_USERNAME): str, vol.Required(CONF_PASSWORD): str}
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigFlowResult
+
+ACCOUNT_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_USERNAME): str,
+        vol.Required(CONF_PASSWORD): str,
+    }
 )
 
-# Schema for configuring the Watts Vision integration
-option_schema = vol.Schema(
-    {vol.Optional(CONF_SCAN_INTERVAL, description={"suggested_value": 300}): int}
+SCAN_INTERVAL_SCHEMA = vol.Schema(
+    {
+        vol.Required(
+            CONF_SCAN_INTERVAL,
+            default=DEFAULT_SCAN_INTERVAL,
+        ): vol.All(int, vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL))
+    }
 )
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """
-    Standard config flow for WattsVision.
-
-    Args:
-        config_entries (ConfigFlow)
-        domain (str, optional): Defaults to DOMAIN constant.
-
-    """
+    """Handle the Watts Vision config flow."""
 
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
+    MINOR_VERSION = 2
 
-    # Dictionary to store user input
-    input: dict
-    # Dictionary to store errors
-    errors: dict = {}
+    def __init__(self) -> None:
+        """Initialize a config flow."""
+        self._account_data: dict[str, Any] | None = None
 
-    async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
-        """
-        Handle the initial configuration step.
+    async def _async_credentials_are_valid(self, username: str, password: str) -> bool:
+        """Return whether the account credentials authenticate."""
+        api = WattsApi(username, password)
+        return await self.hass.async_add_executor_job(api.test_authentication)
 
-        Args:
-            user_input (dict, optional): User input. Defaults to None.
-
-        Returns:
-            FlowResult: A FlowResult object
-
-        """
+    async def async_step_user(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Handle the account credentials step."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            LOGGER.debug(
-                "[ConfigFlow] [async_step_user] user_input submitted %s", user_input
-            )
-            if await self.validate_input_user(user_input) is False:
-                LOGGER.debug("[ConfigFlow] [user] user_input validation failed")
-                LOGGER.debug("[ConfigFlow] [user] errors: %s", self.errors)
-                return await self.async_step_user()
-            LOGGER.debug("[ConfigFlow] [async_step_user] user_input validation passed")
-
-            self.input = user_input
-
-            return await self.async_step_settings()
-
-        LOGGER.debug("[ConfigFlow] [async_step_user] config flow started")
-        return self.async_show_form(
-            step_id="user", data_schema=register_schema, errors=self.errors
-        )
-
-    async def validate_input_user(self, user_input: dict) -> bool:
-        """
-        Validate the user input for the initial configuration step.
-
-        Args:
-            user_input (dict): User input
-
-        Returns:
-            bool: True if the input is valid, False otherwise
-
-        """
-        api = WattsApi(self.hass, user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
-
-        try:
-            authenticated = await self.hass.async_add_executor_job(
-                api.test_authentication
-            )
-        # pylint: disable=broad-except
-        except Exception as exception:
-            LOGGER.exception(
-                "[ConfigFlow] [validate_input_user] Error while authenticating: %s",
-                exception,
-            )
-            self.errors = {CONF_USERNAME: "unknown_authentication_error"}
-            return False
-
-        LOGGER.debug("[ConfigFlow] [validate_input_user] Validating user_input")
-        if user_input[CONF_USERNAME] == "" or user_input[CONF_PASSWORD] == "":
-            self.errors = {CONF_USERNAME: "missing_data"}
-            return False
-        if authenticated is False:
-            self.errors = {CONF_USERNAME: "invalid_credentials"}
-            return False
-        return True
-
-    async def async_step_settings(self, user_input: dict | None = None) -> FlowResult:
-        """
-        Handle the settings configuration step.
-
-        Args:
-            user_input (dict, optional): User input. Defaults to None.
-
-        Returns:
-            FlowResult: A FlowResult object
-
-        """
-        if user_input is not None:
-            LOGGER.debug(
-                "[ConfigFlow] [async_step_settings] user_input submitted %s", user_input
-            )
-            if self.validate_input_settings(user_input) is False:
-                LOGGER.debug(
-                    "[ConfigFlow] [async_step_settings] user_input validation failed"
-                )
-                LOGGER.debug(
-                    "[ConfigFlow] [async_step_settings] errors: %s", self.errors
-                )
+            username = str(user_input[CONF_USERNAME]).strip()
+            password = str(user_input[CONF_PASSWORD])
+            if not username or not password:
+                errors["base"] = "missing_data"
+            elif not await self._async_credentials_are_valid(username, password):
+                errors["base"] = "invalid_credentials"
+            else:
+                await self.async_set_unique_id(username.casefold())
+                self._abort_if_unique_id_configured()
+                self._account_data = {
+                    CONF_USERNAME: username,
+                    CONF_PASSWORD: password,
+                }
                 return await self.async_step_settings()
-            LOGGER.debug(
-                "[ConfigFlow] [async_step_settings] user_input validation passed"
-            )
-
-            self.input.update(user_input)
-
-            LOGGER.info(
-                "[ConfigFlow] [async_step_settings] Creating entry %s", self.input
-            )
-            return self.async_create_entry(
-                title=self.input["username"], data=self.input
-            )
-
-        return self.async_show_form(
-            step_id="settings", data_schema=option_schema, errors=self.errors
-        )
-
-    def validate_input_settings(self, user_input: dict) -> bool:
-        """
-        Validate the user input for the settings step.
-
-        Args:
-            user_input (dict): User input
-
-        Returns:
-            bool: True if the input is valid, False otherwise
-
-        """
-        LOGGER.debug("[ConfigFlow] [validate_input_settings] Validating user_input")
-        if user_input[CONF_SCAN_INTERVAL] < 300:
-            self.errors = {CONF_SCAN_INTERVAL: "scan_interval_too_low"}
-            return False
-        if user_input[CONF_SCAN_INTERVAL] > 86400:
-            self.errors = {CONF_SCAN_INTERVAL: "scan_interval_too_high"}
-            return False
-        return True
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry):
-        """Get the options flow for this handler."""
-        return OptionsFlowHandler()
-
-
-class OptionsFlowHandler(config_entries.OptionsFlow):
-    """
-    Standard options flow for WattsVision.
-
-    Args:
-        config_entries (OptionsFlow)
-
-    """
-
-    VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
-
-    # Dictionary to store errors
-    errors: dict = {}
-
-    async def async_step_init(self, user_input=None):
-        """Manage the options."""
-        return await self.async_step_user()
-
-    async def async_step_user(self, user_input=None):
-        """Manage the options."""
-        if user_input is not None:
-            LOGGER.debug(
-                "[OptionsFlowHandler] [async_step_user] user_input submitted %s",
-                user_input,
-            )
-            if self.validate_input_settings(user_input) is False:
-                LOGGER.debug(
-                    "[OptionsFlowHandler] [async_step_user] user_input validation failed"
-                )
-                LOGGER.debug(
-                    "[OptionsFlowHandler] [async_step_user] errors: %s", self.errors
-                )
-                return await self.async_step_user()
-            LOGGER.debug(
-                "[OptionsFlowHandler] [async_step_user] user_input validation passed"
-            )
-
-            LOGGER.info(
-                "[OptionsFlowHandler] [async_step_user] Updating entry %s", user_input
-            )
-            updated = self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                data={
-                    CONF_USERNAME: self.config_entry.data[CONF_USERNAME],
-                    CONF_PASSWORD: self.config_entry.data[CONF_PASSWORD],
-                    CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
-                },
-            )
-            if updated:
-                LOGGER.info(
-                    "[OptionsFlowHandler] [async_step_user] Entry updated reload platform"
-                )
-                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
-
-            return self.async_create_entry(title="", data=user_input)
-
-        interval = 300
-        try:
-            interval = self.config_entry.data[CONF_SCAN_INTERVAL]
-        except:
-            LOGGER.warn(
-                "Something went wrong retrieving scan interval, attempting to restore"
-            )
-            interval = 300
-        finally:
-            LOGGER.debug("Updating")
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_SCAN_INTERVAL, description={"suggested_value": interval}
-                    ): int
-                }
+            data_schema=ACCOUNT_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_settings(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Handle the scan interval step."""
+        if self._account_data is None:
+            return await self.async_step_user()
+
+        if user_input is not None:
+            return self.async_create_entry(
+                title=str(self._account_data[CONF_USERNAME]),
+                data=self._account_data,
+                options={CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL]},
+            )
+
+        return self.async_show_form(
+            step_id="settings",
+            data_schema=SCAN_INTERVAL_SCHEMA,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        _config_entry: config_entries.ConfigEntry,
+    ) -> OptionsFlowHandler:
+        """Return the options flow handler."""
+        return OptionsFlowHandler()
+
+
+class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
+    """Handle Watts Vision options."""
+
+    async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Manage the integration options."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current_interval = self.config_entry.options.get(
+            CONF_SCAN_INTERVAL,
+            self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                SCAN_INTERVAL_SCHEMA,
+                {CONF_SCAN_INTERVAL: current_interval},
             ),
-            errors=self.errors,
         )
-
-    def validate_input_settings(self, user_input: dict) -> bool:
-        """
-        Validate the user input for the settings step.
-
-        Args:
-            user_input (dict): User input
-
-        Returns:
-            bool: True if the input is valid, False otherwise
-
-        """
-        LOGGER.debug(
-            "[OptionsFlowHandler] [validate_input_settings] Validating user_input"
-        )
-        if user_input[CONF_SCAN_INTERVAL] < 300:
-            self.errors = {CONF_SCAN_INTERVAL: "scan_interval_too_low"}
-            return False
-        if user_input[CONF_SCAN_INTERVAL] > 86400:
-            self.errors = {CONF_SCAN_INTERVAL: "scan_interval_too_high"}
-            return False
-        return True

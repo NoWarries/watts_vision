@@ -3,6 +3,9 @@ default_config:
 
 # https://www.home-assistant.io/integrations/homeassistant/
 homeassistant:
+  name: Watts Vision Development
+  unit_system: metric
+  time_zone: Europe/Amsterdam
   debug: true
 
 # https://www.home-assistant.io/integrations/logger/

@@ -1,95 +1,89 @@
-import logging
-from collections.abc import Callable
+"""Binary sensor platform for Watts Vision."""
+
+from __future__ import annotations
+
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
+from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import API_CLIENT, DOMAIN
-from .watts_api import WattsApi
+from .const import DOMAIN
 
-_LOGGER = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+    from . import WattsVisionConfigEntry
+    from .watts_api import JsonObject, WattsApi
 
 SCAN_INTERVAL = timedelta(seconds=120)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: Callable
-):
-    """Set up the binary_sensor platform."""
-    wattsClient: WattsApi = hass.data[DOMAIN][API_CLIENT]
-
-    smartHomes = wattsClient.getSmartHomes()
-
-    sensors = []
-
-    if smartHomes is not None:
-        for y in range(len(smartHomes)):
-            if smartHomes[y]["zones"] is not None:
-                for z in range(len(smartHomes[y]["zones"])):
-                    if smartHomes[y]["zones"][z]["devices"] is not None:
-                        for x in range(len(smartHomes[y]["zones"][z]["devices"])):
-                            sensors.append(
-                                WattsVisionHeatingBinarySensor(
-                                    wattsClient,
-                                    smartHomes[y]["smarthome_id"],
-                                    smartHomes[y]["zones"][z]["devices"][x]["id"],
-                                    smartHomes[y]["zones"][z]["zone_label"],
-                                )
-                            )
+    _hass: HomeAssistant,
+    config_entry: WattsVisionConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Watts Vision binary sensors."""
+    client = config_entry.runtime_data
+    sensors: list[BinarySensorEntity] = []
+    for smart_home in client.get_smart_homes():
+        smart_home_id = str(smart_home["smarthome_id"])
+        for zone in smart_home.get("zones") or []:
+            zone_label = str(zone["zone_label"])
+            sensors.extend(
+                WattsVisionHeatingBinarySensor(
+                    client,
+                    smart_home_id,
+                    str(device["id"]),
+                    zone_label,
+                )
+                for device in zone.get("devices") or []
+            )
 
     async_add_entities(sensors, update_before_add=True)
 
 
 class WattsVisionHeatingBinarySensor(BinarySensorEntity):
-    """Representation of a Watts Vision thermostat."""
+    """Represent whether a Watts Vision thermostat is actively heating."""
 
-    def __init__(self, wattsClient: WattsApi, smartHome: str, id: str, zone: str):
-        super().__init__()
-        self.client = wattsClient
-        self.smartHome = smartHome
-        self.id = id
-        self.zone = zone
-        self._name = zone + " Heating"
-        self._state: bool = False
-        self._available = True
+    _attr_device_class = BinarySensorDeviceClass.HEAT
+    _attr_has_entity_name = True
+    _attr_translation_key = "heating"
 
-    @property
-    def unique_id(self) -> str:
-        """Return the unique ID of the sensor."""
-        return "thermostat_is_heating_" + self.id
+    def __init__(
+        self,
+        client: WattsApi,
+        smart_home_id: str,
+        device_id: str,
+        zone: str,
+    ) -> None:
+        """Initialize a heating binary sensor."""
+        self._client = client
+        self._smart_home_id = smart_home_id
+        self._device_id = device_id
+        self._attr_unique_id = f"thermostat_is_heating_{device_id}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            manufacturer="Watts",
+            name=f"Thermostat {zone}",
+            model="BT-D03-RF",
+            via_device=(DOMAIN, smart_home_id),
+            suggested_area=zone,
+        )
 
-    @property
-    def name(self) -> str:
-        """Return the name of the entity."""
-        return self._name
+    def _device(self) -> JsonObject | None:
+        """Return the cached device."""
+        return self._client.get_device(self._smart_home_id, self._device_id)
 
-    @property
-    def is_on(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def device_info(self):
-        return {
-            "identifiers": {
-                # Serial numbers are unique identifiers within a specific domain
-                (DOMAIN, self.id)
-            },
-            "manufacturer": "Watts",
-            "name": "Thermostat " + self.zone,
-            "model": "BT-D03-RF",
-            "via_device": (DOMAIN, self.smartHome),
-        }
-
-    async def async_update(self):
-        # try:
-        smartHomeDevice = self.client.getDevice(self.smartHome, self.id)
-        if smartHomeDevice["heating_up"] == "0":
-            self._state = False
-        else:
-            self._state = True
-        # except:
-        #     self._available = False
-        #     _LOGGER.exception("Error retrieving data.")
+    async def async_update(self) -> None:
+        """Update the heating state from cached data."""
+        device = self._device()
+        self._attr_available = device is not None
+        self._attr_is_on = (
+            str(device["heating_up"]) != "0" if device is not None else None
+        )

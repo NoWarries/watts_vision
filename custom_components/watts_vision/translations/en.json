@@ -32,12 +32,39 @@
       "scan_interval_too_high": "Scan interval must be at most 86400 seconds"
     },
     "step": {
-      "user": {
+      "init": {
         "title": "Settings",
         "description": "Configure your Watts Vision integration",
         "data": {
           "scan_interval": "refresh time (seconds)"
         }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "heating": {
+        "name": "Heating"
+      }
+    },
+    "sensor": {
+      "air_temperature": {
+        "name": "Air temperature"
+      },
+      "battery": {
+        "name": "Battery"
+      },
+      "last_communication": {
+        "name": "Last communication"
+      },
+      "preset_mode": {
+        "name": "Preset mode"
+      },
+      "target_temperature": {
+        "name": "Target temperature"
+      },
+      "temperature_mode": {
+        "name": "Temperature mode"
       }
     }
   }

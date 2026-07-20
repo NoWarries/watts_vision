@@ -1,312 +1,310 @@
+"""Synchronous client for the Watts Vision cloud API."""
+
+from __future__ import annotations
+
 import logging
+import threading
 import time
-from datetime import datetime, timedelta
+from typing import Any
 
 import requests
-from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
+AUTH_URL = (
+    "https://auth.smarthome.wattselectronics.com/realms/watts/protocol/"
+    "openid-connect/token"
+)
+API_URL = "https://smarthome.wattselectronics.com/api/v0.1/human"
+REQUEST_TIMEOUT = 30
+
+type JsonObject = dict[str, Any]
+
+
+class WattsApiError(Exception):
+    """Base error raised by the Watts Vision API client."""
+
+
+class WattsAuthenticationError(WattsApiError):
+    """Raised when Watts Vision credentials are rejected."""
+
 
 class WattsApi:
-    """Interface to the Watts API."""
+    """Interface to the Watts Vision cloud API."""
 
-    def __init__(self, hass: HomeAssistant, username: str, password: str):
-        """Init dummy hub."""
-        self._hass = hass
+    def __init__(self, username: str, password: str) -> None:
+        """Initialize the API client."""
         self._username = username
         self._password = password
-        self._token = None
-        self._token_expires = None
-        self._refresh_token = None
-        self._refreshing_token = False
-        self._refresh_expires_in = None
-        self._smartHomeData = {}
+        self._token: str | None = None
+        self._token_expires_at = 0.0
+        self._refresh_token: str | None = None
+        self._refresh_expires_at = 0.0
+        self._refresh_lock = threading.Lock()
+        self._smart_home_data: list[JsonObject] = []
 
     def test_authentication(self) -> bool:
-        """Test if we can authenticate with the host."""
+        """Return whether the configured credentials can authenticate."""
         try:
-            token = self.getLoginToken(True)
-            return token is not None
-        except Exception:
-            _LOGGER.exception("Authentication exception {exception}")
+            self.get_login_token(force_login=True)
+        except WattsApiError:
             return False
+        return True
 
-    def getLoginToken(self, forcelogin=False):
-        """Get the access token for the Watts Smarthome API through login or refresh"""
-        now = datetime.now()
-
+    def get_login_token(self, *, force_login: bool = False) -> str:
+        """Return a valid access token, using login or refresh as needed."""
+        now = time.monotonic()
         if (
-            forcelogin
-            or not self._refresh_expires_in
-            or self._refresh_expires_in <= now
+            force_login
+            or self._refresh_token is None
+            or self._refresh_expires_at <= now
         ):
-            _LOGGER.debug("Login to get an access token.")
+            _LOGGER.debug("Logging in to obtain an access token")
             payload = {
                 "grant_type": "password",
                 "username": self._username,
                 "password": self._password,
                 "client_id": "app-front",
             }
-        elif self._token_expires <= now:
-            _LOGGER.debug("Refreshing access token")
+        elif self._token is not None and self._token_expires_at > now:
+            return self._token
+        else:
+            _LOGGER.debug("Refreshing the Watts Vision access token")
             payload = {
                 "grant_type": "refresh_token",
                 "refresh_token": self._refresh_token,
                 "client_id": "app-front",
             }
-        else:
-            _LOGGER.debug("Getting token called unneeded.")
 
-        request_token_result = requests.post(
-            url="https://auth.smarthome.wattselectronics.com/realms/watts/protocol/openid-connect/token",
-            data=payload,
-        )
-
-        if request_token_result.status_code == 200:
-            token = request_token_result.json()["access_token"]
-            self._token = token
-            self._token_expires = now + timedelta(
-                seconds=request_token_result.json()["expires_in"]
+        try:
+            response = requests.post(
+                AUTH_URL,
+                data=payload,
+                timeout=REQUEST_TIMEOUT,
             )
-            self._refresh_token = request_token_result.json()["refresh_token"]
-            self._refresh_expires_in = now + timedelta(
-                seconds=request_token_result.json()["refresh_expires_in"]
-            )
-            _LOGGER.debug(
-                f"Received access token till {self._token_expires}. refresh_token till {self._refresh_expires_in}"
-            )
-            return token
-        _LOGGER.error(
-            "Something went wrong fetching the token for type {}: {} {}".format(
-                payload["grant_type"],
-                request_token_result.status_code,
-                request_token_result.json(),
-            )
-        )
-        if payload["grant_type"] == "refresh_token":
-            _LOGGER.error("Retrying with relogin")
-            return self.getLoginToken(True)
-        return None
+        except requests.RequestException as err:
+            msg = "Unable to contact the Watts Vision authentication service"
+            raise WattsApiError(msg) from err
 
-    def loadData(self):
-        """Load data from api"""
-        smarthomes = self.loadSmartHomes()
-        self._smartHomeData = smarthomes
+        if response.status_code != requests.codes.ok:
+            if payload["grant_type"] == "refresh_token":
+                _LOGGER.warning(
+                    "Token refresh failed; retrying with account credentials"
+                )
+                return self.get_login_token(force_login=True)
+            msg = (
+                f"Watts Vision authentication failed with status {response.status_code}"
+            )
+            raise WattsAuthenticationError(msg)
 
-        return self.reloadDevices()
+        response_data = self._json_object(response)
+        try:
+            token = str(response_data["access_token"])
+            expires_in = float(response_data["expires_in"])
+            refresh_token = str(response_data["refresh_token"])
+            refresh_expires_in = float(response_data["refresh_expires_in"])
+        except (KeyError, TypeError, ValueError) as err:
+            msg = "Watts Vision returned an invalid authentication response"
+            raise WattsApiError(msg) from err
 
-    def loadSmartHomes(self, firstTry: bool = True):
-        """Load the user data"""
+        self._token = token
+        self._token_expires_at = now + expires_in
+        self._refresh_token = refresh_token
+        self._refresh_expires_at = now + refresh_expires_in
+        _LOGGER.debug("Received a Watts Vision access token")
+        return token
+
+    def load_data(self) -> bool:
+        """Load smart homes and their devices."""
+        self._smart_home_data = self.load_smart_homes()
+        return self.reload_devices()
+
+    def load_smart_homes(self) -> list[JsonObject]:
+        """Load the smart homes associated with the account."""
         self._refresh_token_if_expired()
-
-        headers = {"Authorization": f"Bearer {self._token}"}
-        payload = {"token": "true", "email": self._username, "lang": "nl_NL"}
-
-        user_data_result = requests.post(
-            url="https://smarthome.wattselectronics.com/api/v0.1/human/user/read/",
-            headers=headers,
-            data=payload,
+        response = self._post(
+            f"{API_URL}/user/read/",
+            data={"token": "true", "email": self._username, "lang": "nl_NL"},
         )
+        response_data = self._validated_data(response)
+        smart_homes = response_data.get("smarthomes")
+        if not isinstance(smart_homes, list):
+            msg = "Watts Vision returned invalid smart-home data"
+            raise WattsApiError(msg)
+        return smart_homes
 
-        if self.check_response(user_data_result):
-            return user_data_result.json()["data"]["smarthomes"]
-
-        return None
-
-    def loadDevices(self, smarthome: str, firstTry: bool = True):
-        """Load devices for smart home"""
+    def load_devices(self, smart_home_id: str) -> list[JsonObject]:
+        """Load all zones and devices for a smart home."""
         self._refresh_token_if_expired()
-
-        headers = {"Authorization": f"Bearer {self._token}"}
-        payload = {"token": "true", "smarthome_id": smarthome, "lang": "nl_NL"}
-
-        devices_result = requests.post(
-            url="https://smarthome.wattselectronics.com/api/v0.1/human/smarthome/read/",
-            headers=headers,
-            data=payload,
+        response = self._post(
+            f"{API_URL}/smarthome/read/",
+            data={
+                "token": "true",
+                "smarthome_id": smart_home_id,
+                "lang": "nl_NL",
+            },
         )
-        _LOGGER.debug("Load devices.")
-
-        if self.check_response(devices_result):
-            return devices_result.json()["data"]["zones"]
-
-        return None
+        zones = self._validated_data(response).get("zones")
+        if not isinstance(zones, list):
+            msg = "Watts Vision returned invalid zone data"
+            raise WattsApiError(msg)
+        return zones
 
     def _refresh_token_if_expired(self) -> None:
-        """Check if token is expired and request a new one."""
-        now = datetime.now()
+        """Refresh an expired access token without concurrent refreshes."""
+        if self._token is not None and self._token_expires_at > time.monotonic():
+            return
+        with self._refresh_lock:
+            if self._token is None or self._token_expires_at <= time.monotonic():
+                self.get_login_token()
 
-        timeout = 10
-        while self._refreshing_token and timeout != 0:
-            _LOGGER.debug("Refresh in action.")
-            time.sleep(1 / 10)
-            --timeout
-
-        if (self._token_expires and self._token_expires <= now) or (
-            self._refresh_expires_in and self._refresh_expires_in <= now
-        ):
-            self._refreshing_token = True
-            self.getLoginToken()
-            self._refreshing_token = False
-
-    def reloadDevices(self):
-        """Load devices for each smart home"""
-        if self._smartHomeData is not None:
-            for y in range(len(self._smartHomeData)):
-                zones = self.loadDevices(self._smartHomeData[y]["smarthome_id"])
-                if zones != None:
-                    self._smartHomeData[y]["zones"] = zones
-
+    def reload_devices(self) -> bool:
+        """Reload devices for every known smart home."""
+        for smart_home in self._smart_home_data:
+            smart_home_id = str(smart_home["smarthome_id"])
+            smart_home["zones"] = self.load_devices(smart_home_id)
         return True
 
-    def getSmartHomes(self):
-        """Get smarthomes"""
-        return self._smartHomeData
+    def get_smart_homes(self) -> list[JsonObject]:
+        """Return the cached smart homes."""
+        return self._smart_home_data
 
-    def getDevice(self, smarthome: str, deviceId: str):
-        """Get specific device"""
-        for y in range(len(self._smartHomeData)):
-            if self._smartHomeData[y]["smarthome_id"] == smarthome:
-                for z in range(len(self._smartHomeData[y]["zones"])):
-                    for x in range(len(self._smartHomeData[y]["zones"][z]["devices"])):
-                        if (
-                            self._smartHomeData[y]["zones"][z]["devices"][x]["id"]
-                            == deviceId
-                        ):
-                            return self._smartHomeData[y]["zones"][z]["devices"][x]
-
+    def get_device(self, smart_home_id: str, device_id: str) -> JsonObject | None:
+        """Return a cached device by smart-home and device ID."""
+        for smart_home in self._smart_home_data:
+            if smart_home.get("smarthome_id") != smart_home_id:
+                continue
+            for zone in smart_home.get("zones") or []:
+                for device in zone.get("devices") or []:
+                    if device.get("id") == device_id:
+                        return device
         return None
 
-    def setDevice(self, smarthome: str, deviceId: str, newState: str):
-        """Set specific device"""
-        for y in range(len(self._smartHomeData)):
-            if self._smartHomeData[y]["smarthome_id"] == smarthome:
-                for z in range(len(self._smartHomeData[y]["zones"])):
-                    for x in range(len(self._smartHomeData[y]["zones"][z]["devices"])):
-                        if (
-                            self._smartHomeData[y]["zones"][z]["devices"][x]["id"]
-                            == deviceId
-                        ):
-                            # If device is found, overwrite it with the new state
-                            self._smartHomeData[y]["zones"][z]["devices"][x] = newState
-                            _LOGGER.debug(f"setDevice {deviceId} {newState}")
-                            return self._smartHomeData[y]["zones"][z]["devices"][x]
-
-        return None
-
-    def pushTemperature(
+    def push_temperature(
         self,
-        smarthome: str,
-        deviceID: str,
+        smart_home_id: str,
+        device_id: str,
         value: str,
-        gvMode: str,
-        firstTry: bool = True,
-    ):
+        device_mode: str,
+    ) -> bool:
+        """Push a temperature and mode to a Watts Vision device."""
         self._refresh_token_if_expired()
-
-        headers = {"Authorization": f"Bearer {self._token}"}
         payload = {
             "token": "true",
             "context": "1",
-            "smarthome_id": smarthome,
-            "query[id_device]": deviceID,
+            "smarthome_id": smart_home_id,
+            "query[id_device]": device_id,
             "query[time_boost]": "0",
-            "query[gv_mode]": gvMode,
-            "query[nv_mode]": gvMode,
+            "query[gv_mode]": device_mode,
+            "query[nv_mode]": device_mode,
             "peremption": "15000",
             "lang": "nl_NL",
         }
-        extrapayload = {}
-        if gvMode == "0":
-            extrapayload = {
+        mode_payloads: dict[str, dict[str, str]] = {
+            "0": {
                 "query[consigne_confort]": value,
                 "query[consigne_manuel]": value,
-            }
-        elif gvMode == "1":
-            extrapayload = {
-                "query[consigne_manuel]": "0",
-            }
-        elif gvMode == "2":
-            extrapayload = {
+            },
+            "1": {"query[consigne_manuel]": "0"},
+            "2": {
                 "query[consigne_hg]": "446",
                 "query[consigne_manuel]": "446",
                 "peremption": "20000",
-            }
-        elif gvMode == "3":
-            extrapayload = {
+            },
+            "3": {
                 "query[consigne_eco]": value,
                 "query[consigne_manuel]": value,
-            }
-        elif gvMode == "4":
-            extrapayload = {
+            },
+            "4": {
                 "query[time_boost]": "7200",
                 "query[consigne_boost]": value,
                 "query[consigne_manuel]": value,
-            }
-        elif gvMode == "11":
-            extrapayload = {
-                "query[consigne_manuel]": value,
-            }
-        payload.update(extrapayload)
+            },
+            "11": {"query[consigne_manuel]": value},
+        }
+        payload.update(mode_payloads.get(device_mode, {}))
         _LOGGER.debug(
-            f"pushTemp {value}. mode {gvMode} smarthome {smarthome} device {deviceID}"
+            "Pushing temperature %s in mode %s to device %s",
+            value,
+            device_mode,
+            device_id,
         )
+        response = self._post(f"{API_URL}/query/push/", data=payload)
+        return self.check_response(response)
 
-        push_result = requests.post(
-            url="https://smarthome.wattselectronics.com/api/v0.1/human/query/push/",
-            headers=headers,
-            data=payload,
-        )
-
-        if self.check_response(push_result):
-            return True
-        _LOGGER.debug("pushTemp failed")
-        return False
-
-    def getLastCommunication(self, smarthome: str, firstTry: bool = True):
+    def get_last_communication(self, smart_home_id: str) -> JsonObject:
+        """Return the last-communication data for a smart home."""
         self._refresh_token_if_expired()
-
-        headers = {"Authorization": f"Bearer {self._token}"}
-        payload = {"token": "true", "smarthome_id": smarthome, "lang": "nl_NL"}
-
-        last_connection_result = requests.post(
-            url="https://smarthome.wattselectronics.com/api/v0.1/human/sandbox/check_last_connexion/",
-            headers=headers,
-            data=payload,
+        response = self._post(
+            f"{API_URL}/sandbox/check_last_connexion/",
+            data={
+                "token": "true",
+                "smarthome_id": smart_home_id,
+                "lang": "nl_NL",
+            },
         )
+        return self._validated_data(response)
 
-        if self.check_response(last_connection_result):
-            return last_connection_result.json()["data"]
+    def _post(self, url: str, *, data: dict[str, str]) -> requests.Response:
+        """Make an authenticated POST request."""
+        if self._token is None:
+            msg = "A Watts Vision access token is not available"
+            raise WattsAuthenticationError(msg)
+        try:
+            return requests.post(
+                url,
+                headers={"Authorization": f"Bearer {self._token}"},
+                data=data,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as err:
+            msg = "Unable to contact the Watts Vision API"
+            raise WattsApiError(msg) from err
 
-        return None
+    @classmethod
+    def _validated_data(cls, response: requests.Response) -> JsonObject:
+        """Validate a response and return its data object."""
+        if response.status_code == requests.codes.unauthorized:
+            msg = "Watts Vision authentication is no longer valid"
+            raise WattsAuthenticationError(msg)
+        if not cls.check_response(response):
+            msg = "Watts Vision returned an unsuccessful response"
+            raise WattsApiError(msg)
+        response_data = cls._json_object(response)
+        data = response_data.get("data")
+        if not isinstance(data, dict):
+            msg = "Watts Vision returned invalid response data"
+            raise WattsApiError(msg)
+        return data
 
     @staticmethod
     def check_response(response: requests.Response) -> bool:
-        if response.status_code == 200:
-            if "OK" in response.json()["code"]["key"]:
-                return True
-            # raise APIException("Code: {0}, key: {1}, value: {2}".format(
-            #     response.json()["code"]["code"],
-            #     response.json()["code"]["key"],
-            #     response.json()["code"]["value"]
-            # ))
-            _LOGGER.error(
-                "Something went wrong fetching user data. Code: {}, Key: {}, Value: {}, Data: {}".format(
-                    response.json()["code"]["code"],
-                    response.json()["code"]["key"],
-                    response.json()["code"]["value"],
-                    response.json()["data"],
-                )
-            )
+        """Return whether a Watts Vision API response indicates success."""
+        try:
+            response_data = WattsApi._json_object(response)
+        except WattsApiError:
+            _LOGGER.exception("Watts Vision returned malformed JSON")
             return False
-        # raise UnHandledStatuException(response.status_code)
-        _LOGGER.error(
-            f"Unexpected status code {response.status_code} {response.json()}"
-        )
 
-        if response.status_code == 401:
-            # raise UnauthorizedException("Unauthorized")
-            _LOGGER.error("Unauthorized")
+        if response.status_code == requests.codes.ok:
+            code = response_data.get("code")
+            if isinstance(code, dict) and "OK" in str(code.get("key", "")):
+                return True
+            _LOGGER.error("Watts Vision rejected the request: %s", code)
+            return False
 
+        _LOGGER.error("Watts Vision returned HTTP status %s", response.status_code)
         return False
+
+    @staticmethod
+    def _json_object(response: requests.Response) -> JsonObject:
+        """Decode a response as a JSON object."""
+        try:
+            response_data = response.json()
+        except requests.JSONDecodeError as err:
+            msg = "Watts Vision returned malformed JSON"
+            raise WattsApiError(msg) from err
+        if not isinstance(response_data, dict):
+            msg = "Watts Vision returned a non-object JSON response"
+            raise WattsApiError(msg)
+        return response_data

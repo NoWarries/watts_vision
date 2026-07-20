@@ -37,13 +37,7 @@ Add https://github.com/nowarries/watts_vision to the custom repositories in HACS
 
 Copy the watts_vision folder from custom_components to your custom_components folder of your home assistant instance, go to devices & services and click on '+ add integration'. In the new window search for Watts Vision and click on it. Fill out the form with your credentials for the watts vision smart home system.
 
-### Devcontainer
-*(Bit tricky)*
+## Development
 
-A devcontainer is included for development purposes. This is a containerized development environment that can be used with VSCode. See [here](https://code.visualstudio.com/docs/remote/containers) for more information. Running on [Docker](https://www.docker.com/)? 
-
-1. Install the container extension for VSCode [here](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-2. Install container runtime [here](https://docs.docker.com/get-docker/)
-3. Open folder in container through VSCode `> Dev Container: Open Folder in Container`
-4. Within this containerized environment run `> Tasks: Run Task` and select `> Run Home Assistant on port 8123` again through VSCode
-5. HA should be made available on port 8123 (http://127.0.0.1:8123/)
+Development uses [uv](https://docs.astral.sh/uv/) for Python tooling
+environment and Docker Compose for Home Assistant. Install uv and Docker.
