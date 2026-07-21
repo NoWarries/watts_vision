@@ -60,6 +60,14 @@ OFF_MODES = frozenset(
 )
 
 
+def _preset_name(mode: HeatMode | TempType) -> str:
+    """Return the legacy title-cased Home Assistant preset name."""
+    return mode.value.title()
+
+
+PRESET_MODE_TO_HEAT_MODE = {_preset_name(mode): mode for mode in AVAILABLE_HEAT_MODES}
+
+
 async def async_setup_entry(
     _hass: HomeAssistant,
     config_entry: WattsVisionConfigEntry,
@@ -136,7 +144,7 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         self._api_device_id = api_device_id
         self._attr_unique_id = f"watts_thermostat_{context.device_id}"
         self._attr_name = None
-        self._attr_preset_modes = [mode.value for mode in AVAILABLE_HEAT_MODES]
+        self._attr_preset_modes = list(PRESET_MODE_TO_HEAT_MODE)
         self._attr_target_temperature_step = 1.0
         self._attr_extra_state_attributes = {}
         self._previous_device_mode = WattsVisionDeviceMode.COMFORT
@@ -181,7 +189,7 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         elif device_mode in PROGRAM_MODES:
             self._attr_hvac_mode = HVACMode.AUTO
             self._attr_preset_mode = (
-                mode_info.temp_type.value
+                _preset_name(mode_info.temp_type)
                 if mode_info.temp_type is not TempType.NONE
                 else None
             )
@@ -189,7 +197,7 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         else:
             self._attr_hvac_mode = seasonal_mode
             self._attr_preset_mode = (
-                mode_info.heat_mode.value
+                _preset_name(mode_info.heat_mode)
                 if mode_info.heat_mode is not HeatMode.UNKNOWN
                 else None
             )
@@ -260,7 +268,7 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set the thermostat preset mode."""
         device = self._require_device()
-        heat_mode = HeatMode(preset_mode)
+        heat_mode = PRESET_MODE_TO_HEAT_MODE[preset_mode]
         if heat_mode is HeatMode.OFF:
             await self.async_turn_off()
             return
