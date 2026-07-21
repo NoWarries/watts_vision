@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, override
+import logging
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorEntityDescription,
-    SensorStateClass,
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import UnitOfRatio, UnitOfTemperature
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
+
+from .const import (
+    AVAILABLE_HEAT_MODES,
+    AVAILABLE_TEMP_TYPES,
+    DEVICE_TO_MODE_TYPE,
+    DOMAIN,
+    TEMP_TYPE_TO_DEVICE,
 )
 from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import callback
@@ -198,13 +204,66 @@ class WattsVisionHubSensor(
             connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(mac_address))},
         )
 
-    @property
-    @override
-    def available(self) -> bool:
-        """Return whether the coordinator and central unit are available."""
-        return (
-            super().available
-            and self.coordinator.data.get_smart_home(self._smart_home_id) is not None
+
+class WattsVisionBatterySensor(WattsVisionDeviceSensor):
+    """Represent the Watts Vision device battery state."""
+
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE
+    _attr_translation_key = "battery"
+
+    def __init__(
+        self,
+        client: WattsApi,
+        smart_home_id: str,
+        device_id: str,
+        zone: str,
+    ) -> None:
+        """Initialize a battery sensor."""
+        super().__init__(client, smart_home_id, device_id, zone)
+        self._attr_unique_id = f"battery_{device_id}"
+
+    async def async_update(self) -> None:
+        """Update the battery state from cached data."""
+        device = self._device()
+        self._attr_available = device is not None
+        if device is None:
+            self._attr_native_value = None
+            return
+        if str(device.get("error_code")) == "1":
+            _LOGGER.warning(
+                "Battery is malfunctioning or almost empty for device %s",
+                self._device_id,
+            )
+            self._attr_native_value = 0
+        else:
+            self._attr_native_value = 100
+
+
+class WattsVisionTemperatureSensor(WattsVisionDeviceSensor):
+    """Represent the current air temperature."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
+    _attr_translation_key = "air_temperature"
+
+    def __init__(
+        self,
+        client: WattsApi,
+        smart_home_id: str,
+        device_id: str,
+        zone: str,
+    ) -> None:
+        """Initialize an air-temperature sensor."""
+        super().__init__(client, smart_home_id, device_id, zone)
+        self._attr_unique_id = f"temperature_air_{device_id}"
+
+    async def async_update(self) -> None:
+        """Update the air temperature from cached data."""
+        device = self._device()
+        self._attr_available = device is not None
+        self._attr_native_value = (
+            float(device["temperature_air"]) / 10 if device is not None else None
         )
 
 
