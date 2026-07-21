@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import voluptuous as vol
 from homeassistant import config_entries
@@ -61,6 +61,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         await api.async_validate_credentials()
 
+    @override
     async def async_step_user(
         self,
         user_input: dict[str, Any] | None = None,
@@ -94,6 +95,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    @override
     async def async_step_reauth(
         self,
         _entry_data: Mapping[str, Any],
@@ -101,6 +103,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Start reauthentication after an authentication failure."""
         return await self.async_step_reauth_confirm()
 
+    @override
     async def async_step_reauth_confirm(
         self,
         user_input: dict[str, Any] | None = None,
@@ -134,6 +137,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={CONF_USERNAME: username},
         )
 
+    @override
     async def async_step_settings(
         self,
         user_input: dict[str, Any] | None = None,
@@ -156,6 +160,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(
         _config_entry: config_entries.ConfigEntry,
     ) -> OptionsFlowHandler:
@@ -166,6 +171,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
     """Handle Watts Vision options."""
 
+    @override
     async def async_step_init(
         self,
         user_input: dict[str, Any] | None = None,

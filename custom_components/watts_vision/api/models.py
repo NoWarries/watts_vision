@@ -19,8 +19,14 @@ class WattsVisionDeviceMode(StrEnum):
     FROST = "2"
     ECO = "3"
     BOOST = "4"
+    FAN = "5"
+    FAN_DISABLED = "6"
     PROGRAM_COMFORT = "8"
     PROGRAM_ECO = "11"
+    PROGRAM_UNSPECIFIED = "13"
+    MANUAL = "15"
+    PROGRAM_BOOST = "16"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,7 @@ class WattsVisionDevice:
     device_id: str
     api_device_id: str
     mode: WattsVisionDeviceMode
+    wire_mode: str
     is_heating: bool
     is_cooling: bool
     battery_low: bool
@@ -66,15 +73,17 @@ class WattsVisionDevice:
     @classmethod
     def from_api(cls, data: JsonObject) -> Self:
         """Parse a thermostat response."""
+        wire_mode = _required_string(data, "gv_mode")
         try:
-            mode = WattsVisionDeviceMode(_required_string(data, "gv_mode"))
-        except ValueError as err:
-            msg = f"Watts Vision returned unsupported thermostat mode {err.args[0]}"
-            raise WattsVisionResponseError(msg) from err
+            mode = WattsVisionDeviceMode(wire_mode)
+        except ValueError:
+            # Preserve availability when Watts adds a mode before we model it.
+            mode = WattsVisionDeviceMode.UNKNOWN
         return cls(
             device_id=_required_string(data, "id"),
             api_device_id=_required_string(data, "id_device"),
             mode=mode,
+            wire_mode=wire_mode,
             is_heating=_required_boolean(data, "heating_up"),
             is_cooling=_required_boolean(data, "heat_cool"),
             battery_low=_required_string(data, "error_code") == "1",
@@ -91,18 +100,31 @@ class WattsVisionDevice:
     @property
     def target_temperature(self) -> float | None:
         """Return the active target temperature."""
-        if self.mode is WattsVisionDeviceMode.OFF:
-            return None
-        if self.mode is WattsVisionDeviceMode.FROST:
-            return self.frost_temperature
         if self.mode in {
+            WattsVisionDeviceMode.OFF,
+            WattsVisionDeviceMode.FAN,
+            WattsVisionDeviceMode.FAN_DISABLED,
+            WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
+            WattsVisionDeviceMode.UNKNOWN,
+        }:
+            target_temperature = None
+        elif self.mode is WattsVisionDeviceMode.FROST:
+            target_temperature = self.frost_temperature
+        elif self.mode in {
             WattsVisionDeviceMode.ECO,
             WattsVisionDeviceMode.PROGRAM_ECO,
         }:
-            return self.eco_temperature
-        if self.mode is WattsVisionDeviceMode.BOOST:
-            return self.boost_temperature
-        return self.comfort_temperature
+            target_temperature = self.eco_temperature
+        elif self.mode in {
+            WattsVisionDeviceMode.BOOST,
+            WattsVisionDeviceMode.PROGRAM_BOOST,
+        }:
+            target_temperature = self.boost_temperature
+        elif self.mode is WattsVisionDeviceMode.MANUAL:
+            target_temperature = self.manual_temperature
+        else:
+            target_temperature = self.comfort_temperature
+        return target_temperature
 
     def with_mode(
         self,
@@ -113,6 +135,7 @@ class WattsVisionDevice:
         return replace(
             self,
             mode=mode,
+            wire_mode=mode.value,
             manual_temperature=manual_temperature,
         )
 
@@ -127,6 +150,10 @@ class WattsVisionDevice:
         }:
             changes["eco_temperature"] = temperature
         elif self.mode is WattsVisionDeviceMode.BOOST:
+            changes["boost_temperature"] = temperature
+        elif self.mode is WattsVisionDeviceMode.MANUAL:
+            changes["manual_temperature"] = temperature
+        elif self.mode is WattsVisionDeviceMode.PROGRAM_BOOST:
             changes["boost_temperature"] = temperature
         else:
             changes["comfort_temperature"] = temperature

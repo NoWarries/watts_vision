@@ -16,6 +16,7 @@ from custom_components.watts_vision.api import (
     WattsVisionAuthenticationError,
     WattsVisionClient,
     WattsVisionConnectionError,
+    WattsVisionDevice,
     WattsVisionDeviceMode,
     WattsVisionResponseError,
 )
@@ -274,10 +275,9 @@ async def test_snapshot_is_coherent_typed_and_assembled_for_all_homes() -> None:
     [
         {"temperature_air": "not-a-number"},
         {"heating_up": "unsupported"},
-        {"gv_mode": "unsupported"},
         {"error_code": None},
     ],
-    ids=("temperature", "boolean", "mode", "missing-flag"),
+    ids=("temperature", "boolean", "missing-flag"),
 )
 async def test_snapshot_rejects_malformed_required_device_values(
     invalid_device_update: dict[str, object],
@@ -327,6 +327,42 @@ async def test_snapshot_rejects_malformed_required_device_values(
 
 
 @pytest.mark.parametrize(
+    ("wire_mode", "expected_mode", "expected_target"),
+    [
+        ("0", WattsVisionDeviceMode.COMFORT, 68.0),
+        ("1", WattsVisionDeviceMode.OFF, None),
+        ("2", WattsVisionDeviceMode.FROST, 44.6),
+        ("3", WattsVisionDeviceMode.ECO, 62.0),
+        ("4", WattsVisionDeviceMode.BOOST, 72.0),
+        ("5", WattsVisionDeviceMode.FAN, None),
+        ("6", WattsVisionDeviceMode.FAN_DISABLED, None),
+        ("8", WattsVisionDeviceMode.PROGRAM_COMFORT, 68.0),
+        ("11", WattsVisionDeviceMode.PROGRAM_ECO, 62.0),
+        ("13", WattsVisionDeviceMode.PROGRAM_UNSPECIFIED, None),
+        ("15", WattsVisionDeviceMode.MANUAL, 68.0),
+        ("16", WattsVisionDeviceMode.PROGRAM_BOOST, 72.0),
+        ("future-mode", WattsVisionDeviceMode.UNKNOWN, None),
+    ],
+)
+def test_device_model_supports_all_known_and_future_modes(
+    wire_mode: str,
+    expected_mode: WattsVisionDeviceMode,
+    expected_target: float | None,
+) -> None:
+    """Test every known mode and an unknown future mode remain parseable."""
+    # Arrange - Build a device response with the selected wire mode.
+    device_data = {**_device(), "gv_mode": wire_mode}
+
+    # Act - Parse the immutable API model.
+    device = WattsVisionDevice.from_api(device_data)
+
+    # Assert - Verify semantic mode, raw value, and target selection.
+    assert device.mode is expected_mode
+    assert device.wire_mode == wire_mode
+    assert device.target_temperature == expected_target
+
+
+@pytest.mark.parametrize(
     ("mode", "temperature", "mode_fields"),
     [
         (
@@ -362,12 +398,21 @@ async def test_snapshot_rejects_malformed_required_device_values(
                 "query[consigne_manuel]": "720",
             },
         ),
+        (WattsVisionDeviceMode.FAN, 68.0, {}),
+        (WattsVisionDeviceMode.FAN_DISABLED, 68.0, {}),
         (WattsVisionDeviceMode.PROGRAM_COMFORT, 68.0, {}),
         (
             WattsVisionDeviceMode.PROGRAM_ECO,
             62.0,
             {"query[consigne_manuel]": "620"},
         ),
+        (WattsVisionDeviceMode.PROGRAM_UNSPECIFIED, 68.0, {}),
+        (
+            WattsVisionDeviceMode.MANUAL,
+            68.0,
+            {"query[consigne_manuel]": "680"},
+        ),
+        (WattsVisionDeviceMode.PROGRAM_BOOST, 72.0, {}),
     ],
 )
 async def test_temperature_command_preserves_exact_mode_payload(
@@ -402,6 +447,26 @@ async def test_temperature_command_preserves_exact_mode_payload(
             **mode_fields,
         }
         assert _request_data(mocked_responses, PUSH_URL) == expected_payload
+
+
+async def test_temperature_command_rejects_unknown_mode_without_request() -> None:
+    """Test an unrecognized future mode is never written back to the API."""
+    # Arrange - Create a client with no registered network responses.
+    with aioresponses() as mocked_responses:
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+
+            # Act - Attempt to send the unknown-mode sentinel.
+            with pytest.raises(WattsVisionResponseError):
+                await client.async_set_temperature(
+                    "home-1",
+                    "device-1",
+                    68.0,
+                    WattsVisionDeviceMode.UNKNOWN,
+                )
+
+            # Assert - Verify validation occurred before authentication or I/O.
+            assert not mocked_responses.requests
 
 
 @pytest.mark.parametrize(

@@ -22,8 +22,9 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.watts_vision.api import (
     WattsVisionAuthenticationError,
     WattsVisionConnectionError,
+    WattsVisionDeviceMode,
 )
-from custom_components.watts_vision.const import DOMAIN
+from custom_components.watts_vision.const import DEVICE_TO_MODE_TYPE, DOMAIN
 
 from .conftest import SMART_HOMES, snapshot_from_data
 
@@ -54,6 +55,18 @@ def _state(hass: HomeAssistant, entity_id: str) -> State:
     return state
 
 
+def test_home_assistant_mapping_covers_every_api_mode() -> None:
+    """Test every API mode has a Home Assistant reporting fallback."""
+    # Arrange - Collect every API mode, including the future-mode sentinel.
+    api_modes = set(WattsVisionDeviceMode)
+
+    # Act - Collect the integration's reporting mappings.
+    mapped_modes = set(DEVICE_TO_MODE_TYPE)
+
+    # Assert - Verify an API addition cannot produce an unmapped lookup.
+    assert mapped_modes == api_modes
+
+
 async def test_setup_creates_parent_devices_and_preserves_states(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
@@ -64,9 +77,14 @@ async def test_setup_creates_parent_devices_and_preserves_states(
     device_registry = dr.async_get(hass)
 
     # Act - Resolve the parent, child, and preserved entities.
-    parent = device_registry.async_get_device(identifiers={(DOMAIN, "home-1")})
-    child = device_registry.async_get_device(identifiers={(DOMAIN, "home-1#C001-000")})
     battery_id = _entity_id(hass, Platform.SENSOR, "battery_home-1#C001-000")
+    battery_entry = er.async_get(hass).async_get(battery_id)
+    assert battery_entry is not None
+    assert battery_entry.device_id is not None
+    parent = device_registry.async_get(
+        setup_integration.runtime_data.parent_device_ids["home-1"]
+    )
+    child = device_registry.async_get(battery_entry.device_id)
     temperature_id = _entity_id(
         hass, Platform.SENSOR, "temperature_air_home-1#C001-000"
     )
@@ -108,7 +126,7 @@ async def test_successful_refresh_updates_all_entity_states_together(
 ) -> None:
     """Test one coordinator snapshot refreshes every platform together."""
     # Arrange - Prepare a changed account snapshot.
-    coordinator = setup_integration.runtime_data
+    coordinator = setup_integration.runtime_data.coordinator
     temperature_id = _entity_id(
         hass, Platform.SENSOR, "temperature_air_home-1#C001-000"
     )
@@ -193,7 +211,7 @@ async def test_coordinator_failure_and_recovery_logs_failure_once(
 ) -> None:
     """Test coordinator failure and recovery update entity availability."""
     # Arrange - Prepare an established coordinator outage.
-    coordinator = setup_integration.runtime_data
+    coordinator = setup_integration.runtime_data.coordinator
     temperature_id = _entity_id(
         hass,
         Platform.SENSOR,
@@ -260,7 +278,9 @@ async def test_options_reload_applies_scan_interval(
     await hass.async_block_till_done()
 
     # Assert - Verify the reloaded coordinator interval.
-    assert setup_integration.runtime_data.update_interval == timedelta(seconds=900)
+    assert setup_integration.runtime_data.coordinator.update_interval == timedelta(
+        seconds=900
+    )
 
 
 async def test_unload_removes_entities_and_coordinator_contexts(
@@ -269,7 +289,7 @@ async def test_unload_removes_entities_and_coordinator_contexts(
 ) -> None:
     """Test unloading removes entities and coordinator subscriptions."""
     # Arrange - Capture the coordinator and one entity.
-    coordinator = setup_integration.runtime_data
+    coordinator = setup_integration.runtime_data.coordinator
     temperature_id = _entity_id(
         hass,
         Platform.SENSOR,

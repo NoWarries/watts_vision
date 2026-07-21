@@ -84,7 +84,7 @@ async def test_climate_commands_preserve_api_payloads(
             WattsVisionDeviceMode.OFF,
         ),
     ]
-    coordinator = setup_integration.runtime_data
+    coordinator = setup_integration.runtime_data.coordinator
     device = coordinator.data.get_device("home-1", "home-1#C001-000")
     assert device is not None
     assert device.mode is WattsVisionDeviceMode.OFF

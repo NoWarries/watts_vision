@@ -39,6 +39,25 @@ def test_bundled_api_has_no_home_assistant_imports() -> None:
     assert not has_home_assistant_import
 
 
+def test_integration_uses_forward_compatible_device_registry_api() -> None:
+    """Test device topology avoids calls deprecated for Home Assistant 2026.8."""
+    # Arrange - Collect every Python source file in the integration.
+    source_root = Path(__file__).parents[1] / "custom_components" / "watts_vision"
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in source_root.rglob("*.py")
+    )
+
+    # Act - Find direct uses that cannot select the supported API by HA version.
+    deprecated_references = {
+        reference
+        for reference in ("via_device=", ".async_get_device(")
+        if reference in source
+    }
+
+    # Assert - Verify the compatibility boundary owns all legacy behavior.
+    assert not deprecated_references
+
+
 def test_battery_sensor_uses_percentage_unit_enum() -> None:
     """Test the battery unit cannot regress to the deprecated constant."""
     # Arrange - Read the battery sensor platform source.

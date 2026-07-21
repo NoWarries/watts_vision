@@ -66,6 +66,9 @@ class WattsVisionClient:
         mode: WattsVisionDeviceMode,
     ) -> None:
         """Set a thermostat temperature and mode."""
+        if mode is WattsVisionDeviceMode.UNKNOWN:
+            msg = "Cannot send an unknown Watts Vision thermostat mode"
+            raise WattsVisionResponseError(msg)
         value = str(round(temperature * 10))
         payload = {
             "token": "true",
@@ -99,6 +102,7 @@ class WattsVisionClient:
                 "query[consigne_manuel]": value,
             },
             WattsVisionDeviceMode.PROGRAM_ECO: {"query[consigne_manuel]": value},
+            WattsVisionDeviceMode.MANUAL: {"query[consigne_manuel]": value},
         }
         payload.update(mode_payloads.get(mode, {}))
         await self._async_post("/query/push/", data=payload)

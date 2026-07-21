@@ -37,6 +37,10 @@ class HeatMode(Enum):
     PROGRAM = PRESET_PROGRAM
     ECO = PRESET_ECO
     BOOST = PRESET_BOOST
+    FAN = "Fan"
+    FAN_DISABLED = "Fan Disabled"
+    MANUAL = "Manual"
+    UNKNOWN = "Unknown"
 
 
 class TempType(Enum):
@@ -65,15 +69,24 @@ DEVICE_TO_MODE_TYPE: dict[WattsVisionDeviceMode, ModeInfo] = {
     WattsVisionDeviceMode.FROST: ModeInfo(HeatMode.FROST, TempType.FROST),
     WattsVisionDeviceMode.ECO: ModeInfo(HeatMode.ECO, TempType.ECO),
     WattsVisionDeviceMode.BOOST: ModeInfo(HeatMode.BOOST, TempType.BOOST),
+    WattsVisionDeviceMode.FAN: ModeInfo(HeatMode.FAN, TempType.NONE),
+    WattsVisionDeviceMode.FAN_DISABLED: ModeInfo(
+        HeatMode.FAN_DISABLED,
+        TempType.NONE,
+    ),
     WattsVisionDeviceMode.PROGRAM_COMFORT: ModeInfo(HeatMode.PROGRAM, TempType.COMFORT),
     WattsVisionDeviceMode.PROGRAM_ECO: ModeInfo(HeatMode.PROGRAM, TempType.ECO),
+    WattsVisionDeviceMode.PROGRAM_UNSPECIFIED: ModeInfo(
+        HeatMode.PROGRAM,
+        TempType.NONE,
+    ),
+    WattsVisionDeviceMode.MANUAL: ModeInfo(HeatMode.MANUAL, TempType.MANUAL),
+    WattsVisionDeviceMode.PROGRAM_BOOST: ModeInfo(
+        HeatMode.PROGRAM,
+        TempType.BOOST,
+    ),
+    WattsVisionDeviceMode.UNKNOWN: ModeInfo(HeatMode.UNKNOWN, TempType.NONE),
 }
-
-# - 5: fan
-# - 6: fan disabled
-# - 13: program with no known temperature type
-# - 15: manual temperature
-# - 16: program using the boost temperature
 
 HEAT_MODE_TO_DEVICE: dict[HeatMode, WattsVisionDeviceMode] = {
     HeatMode.ECO: WattsVisionDeviceMode.ECO,
@@ -82,6 +95,9 @@ HEAT_MODE_TO_DEVICE: dict[HeatMode, WattsVisionDeviceMode] = {
     HeatMode.PROGRAM: WattsVisionDeviceMode.PROGRAM_ECO,
     HeatMode.BOOST: WattsVisionDeviceMode.BOOST,
     HeatMode.OFF: WattsVisionDeviceMode.OFF,
+    HeatMode.FAN: WattsVisionDeviceMode.FAN,
+    HeatMode.FAN_DISABLED: WattsVisionDeviceMode.FAN_DISABLED,
+    HeatMode.MANUAL: WattsVisionDeviceMode.MANUAL,
 }
 
 TEMP_TYPE_TO_STATE_ATTRIBUTE: dict[TempType, str] = {
@@ -130,4 +146,18 @@ AVAILABLE_HEAT_MODES: tuple[HeatMode, ...] = (
     HeatMode.PROGRAM,
     HeatMode.BOOST,
     HeatMode.OFF,
+    HeatMode.FAN,
+    HeatMode.FAN_DISABLED,
+    HeatMode.MANUAL,
+)
+
+REPORTED_HEAT_MODES: tuple[HeatMode, ...] = (
+    *AVAILABLE_HEAT_MODES,
+    HeatMode.UNKNOWN,
+)
+
+REPORTED_TEMP_TYPES: tuple[TempType, ...] = (
+    *AVAILABLE_TEMP_TYPES,
+    TempType.NONE,
+    TempType.MANUAL,
 )

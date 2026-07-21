@@ -52,6 +52,29 @@
       }
     }
   },
+  "exceptions": {
+    "authentication_failed": {
+      "message": "Authentication with Watts Vision failed"
+    },
+    "device_unavailable": {
+      "message": "Watts Vision device {device_id} is unavailable"
+    },
+    "temperature_limits_unavailable": {
+      "message": "The thermostat temperature limits are unavailable"
+    },
+    "temperature_mode_unsupported": {
+      "message": "Setting the temperature is not supported in {mode} mode"
+    },
+    "thermostat_update_failed": {
+      "message": "Unable to update the Watts Vision thermostat"
+    },
+    "thermostat_update_rejected": {
+      "message": "Watts Vision rejected the thermostat update"
+    },
+    "update_failed": {
+      "message": "Unable to update Watts Vision data"
+    }
+  },
   "entity": {
     "binary_sensor": {
       "heating": {
