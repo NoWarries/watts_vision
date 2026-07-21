@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, override
 from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
@@ -104,6 +105,7 @@ class WattsVisionDataUpdateCoordinator(DataUpdateCoordinator[WattsVisionSnapshot
         if self._known_device_identifiers:
             stale_identifiers = self._known_device_identifiers - current_identifiers
             if stale_identifiers:
+                entity_registry = er.async_get(self.hass)
                 for device_entry in dr.async_entries_for_config_entry(
                     device_registry,
                     self.config_entry.entry_id,
@@ -112,6 +114,19 @@ class WattsVisionDataUpdateCoordinator(DataUpdateCoordinator[WattsVisionSnapshot
                         domain == DOMAIN and identifier in stale_identifiers
                         for domain, identifier in device_entry.identifiers
                     ):
+                        for entity_entry in er.async_entries_for_device(
+                            entity_registry,
+                            device_entry.id,
+                            include_disabled_entities=True,
+                        ):
+                            if (
+                                entity_entry.config_entry_id
+                                == self.config_entry.entry_id
+                            ):
+                                entity_registry.async_update_entity(
+                                    entity_entry.entity_id,
+                                    device_id=None,
+                                )
                         device_registry.async_update_device(
                             device_entry.id,
                             remove_config_entry_id=self.config_entry.entry_id,
