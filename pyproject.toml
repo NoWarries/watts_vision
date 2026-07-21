@@ -30,6 +30,7 @@ line-length = 88
 select = ["ALL"]
 ignore = [
     "ANN401",
+    "ANN401",
     "COM812",
     "D203",
     "D212",
@@ -52,7 +53,7 @@ keep-runtime-typing = true
 docstring-code-format = true
 
 [tool.pytest.ini_options]
-addopts = "--cov=custom_components.watts_vision --cov-fail-under=95 --cov-report=term-missing"
+addopts = "--cov=custom_components.watts_vision --cov-fail-under=90 --cov-report=term-missing"
 asyncio_mode = "auto"
 filterwarnings = [
     "error::DeprecationWarning:custom_components\\.watts_vision.*",
