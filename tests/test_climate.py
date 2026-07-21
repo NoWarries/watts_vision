@@ -20,8 +20,12 @@ from homeassistant.const import ATTR_ENTITY_ID, Platform
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.watts_vision.api import (
+    WattsVisionConnectionError,
+    WattsVisionDeviceMode,
+    WattsVisionResponseError,
+)
 from custom_components.watts_vision.const import DOMAIN
-from custom_components.watts_vision.watts_api import WattsApiError
 
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
@@ -33,7 +37,7 @@ if TYPE_CHECKING:
 async def test_climate_commands_preserve_api_payloads(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
-    mock_watts_api: MagicMock,
+    mock_watts_client: MagicMock,
 ) -> None:
     """Test temperature and HVAC commands preserve their API payloads."""
     # Arrange - Resolve the thermostat entity.
@@ -66,25 +70,39 @@ async def test_climate_commands_preserve_api_payloads(
     )
 
     # Assert - Verify the existing API payloads.
-    assert mock_watts_api.push_temperature.call_args_list == [
-        call("home-1", "api-device-1", "680", "0"),
-        call("home-1", "api-device-1", "500", "1"),
+    assert mock_watts_client.async_set_temperature.await_args_list == [
+        call(
+            "home-1",
+            "api-device-1",
+            68.0,
+            WattsVisionDeviceMode.COMFORT,
+        ),
+        call(
+            "home-1",
+            "api-device-1",
+            50.0,
+            WattsVisionDeviceMode.OFF,
+        ),
     ]
+    coordinator = setup_integration.runtime_data
+    device = coordinator.data.get_device("home-1", "home-1#C001-000")
+    assert device is not None
+    assert device.mode is WattsVisionDeviceMode.OFF
 
 
 @pytest.mark.parametrize(
     ("api_result", "expected_message"),
     [
-        (WattsApiError("cloud failure"), "Unable to update"),
-        (False, "rejected"),
+        (WattsVisionConnectionError("cloud failure"), "Unable to update"),
+        (WattsVisionResponseError("rejected"), "rejected"),
     ],
     ids=("api-error", "rejected-command"),
 )
 async def test_climate_command_reports_api_failure(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
-    mock_watts_api: MagicMock,
-    api_result: object,
+    mock_watts_client: MagicMock,
+    api_result: Exception,
     expected_message: str,
 ) -> None:
     """Test climate commands retain their API error behavior."""
@@ -96,11 +114,7 @@ async def test_climate_command_reports_api_failure(
         "watts_thermostat_home-1#C001-000",
     )
     assert entity_id is not None
-    if isinstance(api_result, Exception):
-        mock_watts_api.push_temperature.side_effect = api_result
-    else:
-        assert api_result is False
-        mock_watts_api.push_temperature.return_value = api_result
+    mock_watts_client.async_set_temperature.side_effect = api_result
 
     # Act - Send the thermostat command.
     with pytest.raises(HomeAssistantError) as raised_error:

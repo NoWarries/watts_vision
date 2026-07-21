@@ -16,16 +16,22 @@ from homeassistant.const import UnitOfTemperature
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
+from .api import (
+    WattsVisionDevice,
+    WattsVisionDeviceMode,
+    WattsVisionError,
+    WattsVisionResponseError,
+)
 from .const import (
     AVAILABLE_HEAT_MODES,
     AVAILABLE_TEMP_TYPES,
     DEVICE_TO_MODE_TYPE,
     HEAT_MODE_TO_DEVICE,
-    TEMP_TYPE_TO_DEVICE,
+    TEMP_TYPE_TO_STATE_ATTRIBUTE,
     HeatMode,
+    temperature_for_type,
 )
 from .entity import WattsVisionEntity
-from .watts_api import WattsApiError
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -33,7 +39,6 @@ if TYPE_CHECKING:
 
     from . import WattsVisionConfigEntry
     from .coordinator import WattsVisionDataUpdateCoordinator
-    from .watts_api import JsonObject
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 1
@@ -48,18 +53,17 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data
     entities: list[ClimateEntity] = []
     for smart_home in coordinator.data.smart_homes:
-        smart_home_id = str(smart_home["smarthome_id"])
-        for zone in smart_home.get("zones") or []:
-            zone_label = str(zone["zone_label"])
+        smart_home_id = smart_home.smart_home_id
+        for zone in smart_home.zones:
             entities.extend(
                 WattsThermostat(
                     coordinator,
                     smart_home_id,
-                    str(device["id"]),
-                    str(device["id_device"]),
-                    zone_label,
+                    device.device_id,
+                    device.api_device_id,
+                    zone.label,
                 )
-                for device in zone.get("devices") or []
+                for device in zone.devices
             )
 
     async_add_entities(entities)
@@ -103,42 +107,42 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         if device is None:
             return
 
-        device_mode = str(device["gv_mode"])
-        self._attr_current_temperature = float(device["temperature_air"]) / 10
-        if device_mode == "2":
+        device_mode = device.mode
+        self._attr_current_temperature = device.air_temperature
+        if device_mode is WattsVisionDeviceMode.FROST:
             self._attr_min_temp = 44.6
             self._attr_max_temp = 44.6
         else:
-            self._attr_min_temp = float(device["min_set_point"]) / 10
-            self._attr_max_temp = float(device["max_set_point"]) / 10
+            self._attr_min_temp = device.min_temperature
+            self._attr_max_temp = device.max_temperature
 
-        if str(device["heating_up"]) == "0":
+        if not device.is_heating:
             self._attr_hvac_action = (
-                HVACAction.OFF if device_mode == "1" else HVACAction.IDLE
+                HVACAction.OFF
+                if device_mode is WattsVisionDeviceMode.OFF
+                else HVACAction.IDLE
             )
-        elif str(device["heat_cool"]) == "1":
+        elif device.is_cooling:
             self._attr_hvac_action = HVACAction.COOLING
         else:
             self._attr_hvac_action = HVACAction.HEATING
 
         mode_info = DEVICE_TO_MODE_TYPE[device_mode]
         self._attr_preset_mode = mode_info.heat_mode.value
-        if device_mode == "1":
+        if device_mode is WattsVisionDeviceMode.OFF:
             self._attr_hvac_mode = HVACMode.OFF
             self._attr_target_temperature = None
         else:
-            self._attr_hvac_mode = (
-                HVACMode.COOL if str(device["heat_cool"]) == "1" else HVACMode.HEAT
-            )
-            temperature_key = TEMP_TYPE_TO_DEVICE[mode_info.temp_type]
-            self._attr_target_temperature = float(device[temperature_key]) / 10
+            self._attr_hvac_mode = HVACMode.COOL if device.is_cooling else HVACMode.HEAT
+            self._attr_target_temperature = device.target_temperature
 
         for temperature_type in AVAILABLE_TEMP_TYPES:
-            temperature_key = TEMP_TYPE_TO_DEVICE[temperature_type]
-            self._attr_extra_state_attributes[temperature_key] = (
-                float(device[temperature_key]) / 10
+            state_attribute = TEMP_TYPE_TO_STATE_ATTRIBUTE[temperature_type]
+            self._attr_extra_state_attributes[state_attribute] = temperature_for_type(
+                device,
+                temperature_type,
             )
-        self._attr_extra_state_attributes["gv_mode"] = device_mode
+        self._attr_extra_state_attributes["gv_mode"] = device_mode.value
         _LOGGER.debug(
             "Updated %s: mode=%s target=%s current=%s",
             self._device_id,
@@ -156,30 +160,33 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set the HVAC mode."""
         device = self._require_device()
-        current_mode = str(device["gv_mode"])
+        current_mode = device.mode
         if hvac_mode == HVACMode.OFF:
-            self._attr_extra_state_attributes["previous_gv_mode"] = current_mode
+            self._attr_extra_state_attributes["previous_gv_mode"] = current_mode.value
             device_mode = HEAT_MODE_TO_DEVICE[HeatMode.OFF]
             value = 0.0
         else:
-            device_mode = str(
-                self._attr_extra_state_attributes.get("previous_gv_mode", current_mode)
+            device_mode = WattsVisionDeviceMode(
+                str(
+                    self._attr_extra_state_attributes.get(
+                        "previous_gv_mode",
+                        current_mode.value,
+                    )
+                )
             )
-            if device_mode == "1":
+            if device_mode is WattsVisionDeviceMode.OFF:
                 device_mode = HEAT_MODE_TO_DEVICE[HeatMode.COMFORT]
-            temperature_key = TEMP_TYPE_TO_DEVICE[
-                DEVICE_TO_MODE_TYPE[device_mode].temp_type
-            ]
-            value = float(self._attr_extra_state_attributes[temperature_key])
+            value = temperature_for_type(
+                device,
+                DEVICE_TO_MODE_TYPE[device_mode].temp_type,
+            )
 
         value = self._clamp_temperature(value)
-        api_value = str(round(value * 10))
-
-        # Device reloads can take a while, so update the shared cache
-        # optimistically to keep every entity consistent until the next poll.
-        device["consigne_manuel"] = api_value
-        device["gv_mode"] = device_mode
-        await self._async_push_temperature(api_value, device_mode)
+        await self._async_push_temperature(
+            value,
+            device_mode,
+            device.with_mode(device_mode, value),
+        )
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set the thermostat preset mode."""
@@ -187,25 +194,25 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         heat_mode = HeatMode(preset_mode)
         device_mode = HEAT_MODE_TO_DEVICE[heat_mode]
         if heat_mode in {HeatMode.OFF, HeatMode.PROGRAM}:
-            api_value = "0"
-            self._attr_extra_state_attributes["previous_gv_mode"] = str(
-                device["gv_mode"]
-            )
+            value = 0.0
+            self._attr_extra_state_attributes["previous_gv_mode"] = device.mode.value
         else:
-            temperature_key = TEMP_TYPE_TO_DEVICE[
-                DEVICE_TO_MODE_TYPE[device_mode].temp_type
-            ]
-            value = float(self._attr_extra_state_attributes[temperature_key])
-            value = self._clamp_temperature(value)
-            api_value = str(round(value * 10))
-        device["consigne_manuel"] = api_value
-        device["gv_mode"] = device_mode
-        await self._async_push_temperature(api_value, device_mode)
+            value = self._clamp_temperature(
+                temperature_for_type(
+                    device,
+                    DEVICE_TO_MODE_TYPE[device_mode].temp_type,
+                )
+            )
+        await self._async_push_temperature(
+            value,
+            device_mode,
+            device.with_mode(device_mode, value),
+        )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set a new target temperature."""
         device = self._require_device()
-        device_mode = str(device["gv_mode"])
+        device_mode = device.mode
         mode_info = DEVICE_TO_MODE_TYPE[device_mode]
         if mode_info.heat_mode == HeatMode.PROGRAM:
             # Watts rejects direct target-temperature writes in program mode.
@@ -216,13 +223,13 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
             raise HomeAssistantError(msg)
 
         value = self._clamp_temperature(float(int(kwargs[ATTR_TEMPERATURE])))
-        api_value = str(round(value * 10))
-        temperature_key = TEMP_TYPE_TO_DEVICE[mode_info.temp_type]
-        device["consigne_manuel"] = api_value
-        device[temperature_key] = api_value
-        await self._async_push_temperature(api_value, device_mode)
+        await self._async_push_temperature(
+            value,
+            device_mode,
+            device.with_target_temperature(value),
+        )
 
-    def _require_device(self) -> JsonObject:
+    def _require_device(self) -> WattsVisionDevice:
         """Return the cached device or raise when unavailable."""
         device = self._device()
         if device is None:
@@ -239,20 +246,27 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
             raise HomeAssistantError(msg)
         return min(max(value, minimum), maximum)
 
-    async def _async_push_temperature(self, value: str, device_mode: str) -> None:
-        """Push a temperature update through the executor."""
+    async def _async_push_temperature(
+        self,
+        value: float,
+        device_mode: WattsVisionDeviceMode,
+        updated_device: WattsVisionDevice,
+    ) -> None:
+        """Push a temperature update and publish its optimistic state."""
         try:
-            success = await self.hass.async_add_executor_job(
-                self.coordinator.client.push_temperature,
+            await self.coordinator.client.async_set_temperature(
                 self._smart_home_id,
                 self._api_device_id,
                 value,
                 device_mode,
             )
-        except WattsApiError as err:
+        except WattsVisionResponseError as err:
+            msg = "Watts Vision rejected the thermostat update"
+            raise HomeAssistantError(msg) from err
+        except WattsVisionError as err:
             msg = "Unable to update the Watts Vision thermostat"
             raise HomeAssistantError(msg) from err
-        if not success:
-            msg = "Watts Vision rejected the thermostat update"
-            raise HomeAssistantError(msg)
-        self.coordinator.async_set_updated_data(self.coordinator.data)
+        self.coordinator.async_set_updated_device(
+            self._smart_home_id,
+            updated_device,
+        )

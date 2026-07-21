@@ -31,17 +31,16 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data
     sensors: list[BinarySensorEntity] = []
     for smart_home in coordinator.data.smart_homes:
-        smart_home_id = str(smart_home["smarthome_id"])
-        for zone in smart_home.get("zones") or []:
-            zone_label = str(zone["zone_label"])
+        smart_home_id = smart_home.smart_home_id
+        for zone in smart_home.zones:
             sensors.extend(
                 WattsVisionHeatingBinarySensor(
                     coordinator,
                     smart_home_id,
-                    str(device["id"]),
-                    zone_label,
+                    device.device_id,
+                    zone.label,
                 )
-                for device in zone.get("devices") or []
+                for device in zone.devices
             )
 
     async_add_entities(sensors)
@@ -68,4 +67,4 @@ class WattsVisionHeatingBinarySensor(WattsVisionEntity, BinarySensorEntity):
     def is_on(self) -> bool | None:
         """Return whether the thermostat is actively heating."""
         device = self._device()
-        return str(device["heating_up"]) != "0" if device is not None else None
+        return device.is_heating if device is not None else None

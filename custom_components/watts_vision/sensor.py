@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import UnitOfRatio, UnitOfTemperature
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -14,7 +14,6 @@ from .const import (
     AVAILABLE_TEMP_TYPES,
     DEVICE_TO_MODE_TYPE,
     DOMAIN,
-    TEMP_TYPE_TO_DEVICE,
 )
 from .coordinator import WattsVisionDataUpdateCoordinator
 from .entity import WattsVisionEntity
@@ -39,27 +38,25 @@ async def async_setup_entry(
     sensors: list[SensorEntity] = []
 
     for smart_home in coordinator.data.smart_homes:
-        smart_home_id = str(smart_home["smarthome_id"])
-        for zone in smart_home.get("zones") or []:
-            zone_label = str(zone["zone_label"])
-            for device in zone.get("devices") or []:
-                device_id = str(device["id"])
+        smart_home_id = smart_home.smart_home_id
+        for zone in smart_home.zones:
+            for device in zone.devices:
                 sensors.extend(
                     (
                         WattsVisionPresetModeSensor(
-                            coordinator, smart_home_id, device_id, zone_label
+                            coordinator, smart_home_id, device.device_id, zone.label
                         ),
                         WattsVisionTemperatureModeSensor(
-                            coordinator, smart_home_id, device_id, zone_label
+                            coordinator, smart_home_id, device.device_id, zone.label
                         ),
                         WattsVisionTemperatureSensor(
-                            coordinator, smart_home_id, device_id, zone_label
+                            coordinator, smart_home_id, device.device_id, zone.label
                         ),
                         WattsVisionSetTemperatureSensor(
-                            coordinator, smart_home_id, device_id, zone_label
+                            coordinator, smart_home_id, device.device_id, zone.label
                         ),
                         WattsVisionBatterySensor(
-                            coordinator, smart_home_id, device_id, zone_label
+                            coordinator, smart_home_id, device.device_id, zone.label
                         ),
                     )
                 )
@@ -68,8 +65,8 @@ async def async_setup_entry(
             WattsVisionLastCommunicationSensor(
                 coordinator,
                 smart_home_id,
-                str(smart_home["label"]),
-                str(smart_home["mac_address"]),
+                smart_home.label,
+                smart_home.mac_address,
             )
         )
 
@@ -115,7 +112,7 @@ class WattsVisionPresetModeSensor(WattsVisionDeviceSensor):
         """Return the active preset mode."""
         device = self._device()
         return (
-            DEVICE_TO_MODE_TYPE[str(device["gv_mode"])].heat_mode.value.capitalize()
+            DEVICE_TO_MODE_TYPE[device.mode].heat_mode.value.capitalize()
             if device is not None
             else None
         )
@@ -146,7 +143,7 @@ class WattsVisionTemperatureModeSensor(WattsVisionDeviceSensor):
         """Return the active temperature mode."""
         device = self._device()
         return (
-            DEVICE_TO_MODE_TYPE[str(device["gv_mode"])].temp_type.value.capitalize()
+            DEVICE_TO_MODE_TYPE[device.mode].temp_type.value.capitalize()
             if device is not None
             else None
         )
@@ -156,7 +153,7 @@ class WattsVisionBatterySensor(WattsVisionDeviceSensor):
     """Represent the Watts Vision device battery state."""
 
     _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = "%"
+    _attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE
     _attr_translation_key = "battery"
 
     def __init__(
@@ -176,9 +173,7 @@ class WattsVisionBatterySensor(WattsVisionDeviceSensor):
         device = self._device()
         if device is None:
             return None
-        if str(device.get("error_code")) == "1":
-            return 0
-        return 100
+        return 0 if device.battery_low else 100
 
 
 class WattsVisionTemperatureSensor(WattsVisionDeviceSensor):
@@ -203,7 +198,7 @@ class WattsVisionTemperatureSensor(WattsVisionDeviceSensor):
     def native_value(self) -> float | None:
         """Return the current air temperature."""
         device = self._device()
-        return float(device["temperature_air"]) / 10 if device is not None else None
+        return device.air_temperature if device is not None else None
 
 
 class WattsVisionSetTemperatureSensor(WattsVisionDeviceSensor):
@@ -228,12 +223,9 @@ class WattsVisionSetTemperatureSensor(WattsVisionDeviceSensor):
     def native_value(self) -> float | None:
         """Return the active target temperature."""
         device = self._device()
-        if device is None or str(device["gv_mode"]) == "1":
+        if device is None:
             return None
-        temperature_key = TEMP_TYPE_TO_DEVICE[
-            DEVICE_TO_MODE_TYPE[str(device["gv_mode"])].temp_type
-        ]
-        return float(device[temperature_key]) / 10
+        return device.target_temperature
 
 
 class WattsVisionLastCommunicationSensor(
@@ -266,11 +258,11 @@ class WattsVisionLastCommunicationSensor(
     @property
     def native_value(self) -> str | None:
         """Return the last communication value."""
-        data = self.coordinator.data.last_communication.get(self._smart_home_id)
-        if data is None:
+        smart_home = self.coordinator.data.get_smart_home(self._smart_home_id)
+        if smart_home is None:
             return None
-        difference = data["diffObj"]
+        difference = smart_home.last_communication
         return (
-            f"{difference['days']} days, {difference['hours']} hours, "
-            f"{difference['minutes']} minutes and {difference['seconds']} seconds."
+            f"{difference.days} days, {difference.hours} hours, "
+            f"{difference.minutes} minutes and {difference.seconds} seconds."
         )

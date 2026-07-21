@@ -11,7 +11,7 @@ from .const import DOMAIN
 from .coordinator import WattsVisionDataUpdateCoordinator
 
 if TYPE_CHECKING:
-    from .watts_api import JsonObject
+    from .api import WattsVisionDevice
 
 
 class WattsVisionEntity(CoordinatorEntity[WattsVisionDataUpdateCoordinator]):
@@ -44,7 +44,7 @@ class WattsVisionEntity(CoordinatorEntity[WattsVisionDataUpdateCoordinator]):
         """Return whether the coordinator and device are available."""
         return super().available and self._device() is not None
 
-    def _device(self) -> JsonObject | None:
+    def _device(self) -> WattsVisionDevice | None:
         """Return the device from the latest coordinator snapshot."""
         return self.coordinator.data.get_device(
             self._smart_home_id,

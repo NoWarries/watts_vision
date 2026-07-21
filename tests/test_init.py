@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -20,13 +19,13 @@ from homeassistant.const import (
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.watts_vision.const import DOMAIN
-from custom_components.watts_vision.watts_api import (
-    WattsApiError,
-    WattsAuthenticationError,
+from custom_components.watts_vision.api import (
+    WattsVisionAuthenticationError,
+    WattsVisionConnectionError,
 )
+from custom_components.watts_vision.const import DOMAIN
 
-from .conftest import SMART_HOMES
+from .conftest import SMART_HOMES, snapshot_from_data
 
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
@@ -105,7 +104,7 @@ async def test_setup_creates_parent_devices_and_preserves_states(
 async def test_successful_refresh_updates_all_entity_states_together(
     hass: HomeAssistant,
     setup_integration: WattsVisionConfigEntry,
-    mock_watts_api: MagicMock,
+    mock_watts_client: MagicMock,
 ) -> None:
     """Test one coordinator snapshot refreshes every platform together."""
     # Arrange - Prepare a changed account snapshot.
@@ -120,15 +119,27 @@ async def test_successful_refresh_updates_all_entity_states_together(
     last_communication_id = _entity_id(
         hass, Platform.SENSOR, "last_communication_home-1"
     )
-    refreshed_homes = deepcopy(SMART_HOMES)
-    refreshed_device = refreshed_homes[0]["zones"][0]["devices"][0]
-    refreshed_device["temperature_air"] = "700"
-    refreshed_device["gv_mode"] = "3"
-    refreshed_device["heating_up"] = "0"
-    mock_watts_api.get_smart_homes.side_effect = lambda: deepcopy(refreshed_homes)
-    mock_watts_api.get_last_communication.return_value = {
-        "diffObj": {"days": 1, "hours": 2, "minutes": 3, "seconds": 4}
+    refreshed_home_data = [dict(SMART_HOMES[0])]
+    refreshed_home_data[0] = {
+        **SMART_HOMES[0],
+        "zones": [
+            {
+                **SMART_HOMES[0]["zones"][0],
+                "devices": [
+                    {
+                        **SMART_HOMES[0]["zones"][0]["devices"][0],
+                        "temperature_air": "700",
+                        "gv_mode": "3",
+                        "heating_up": "0",
+                    }
+                ],
+            }
+        ],
     }
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(
+        refreshed_home_data,
+        {"diffObj": {"days": 1, "hours": 2, "minutes": 3, "seconds": 4}},
+    )
 
     # Act - Refresh the shared coordinator once.
     await coordinator.async_refresh()
@@ -146,20 +157,20 @@ async def test_successful_refresh_updates_all_entity_states_together(
 @pytest.mark.parametrize(
     ("error", "expected_state"),
     [
-        (WattsAuthenticationError, ConfigEntryState.SETUP_ERROR),
-        (WattsApiError, ConfigEntryState.SETUP_RETRY),
+        (WattsVisionAuthenticationError, ConfigEntryState.SETUP_ERROR),
+        (WattsVisionConnectionError, ConfigEntryState.SETUP_RETRY),
     ],
 )
 async def test_setup_handles_cloud_failures(
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    mock_watts_api: MagicMock,
+    mock_watts_client: MagicMock,
     error: type[Exception],
     expected_state: ConfigEntryState,
 ) -> None:
     """Test setup distinguishes authentication and temporary failures."""
     # Arrange - Make the initial cloud request fail.
-    mock_watts_api.load_data.side_effect = error("cloud failure")
+    mock_watts_client.async_get_snapshot.side_effect = error("cloud failure")
 
     # Act - Attempt config-entry setup.
     await hass.config_entries.async_setup(config_entry.entry_id)
@@ -167,7 +178,7 @@ async def test_setup_handles_cloud_failures(
 
     # Assert - Verify retry or reauthentication behavior.
     assert config_entry.state is expected_state
-    if error is WattsAuthenticationError:
+    if error is WattsVisionAuthenticationError:
         assert any(
             flow["context"]["source"] == "reauth"
             for flow in hass.config_entries.flow.async_progress()
@@ -177,7 +188,7 @@ async def test_setup_handles_cloud_failures(
 async def test_coordinator_failure_and_recovery_logs_failure_once(
     hass: HomeAssistant,
     setup_integration: WattsVisionConfigEntry,
-    mock_watts_api: MagicMock,
+    mock_watts_client: MagicMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test coordinator failure and recovery update entity availability."""
@@ -188,27 +199,47 @@ async def test_coordinator_failure_and_recovery_logs_failure_once(
         Platform.SENSOR,
         "temperature_air_home-1#C001-000",
     )
-    mock_watts_api.load_data.side_effect = WattsApiError("offline")
+    mock_watts_client.async_get_snapshot.side_effect = WattsVisionConnectionError(
+        "offline"
+    )
+    previous_snapshot = coordinator.data
     caplog.set_level(logging.ERROR, logger="custom_components.watts_vision")
 
     # Act - Fail twice, then recover with fresh data.
     await coordinator.async_refresh()
     await coordinator.async_refresh()
     state_while_offline = _state(hass, temperature_id).state
+    snapshot_while_offline = coordinator.data
     errors_while_offline = [
         record for record in caplog.records if record.levelno == logging.ERROR
     ]
-    recovered_homes = deepcopy(SMART_HOMES)
-    recovered_homes[0]["zones"][0]["devices"][0]["temperature_air"] = "700"
-    mock_watts_api.load_data.side_effect = None
-    mock_watts_api.load_data.return_value = True
-    mock_watts_api.get_smart_homes.side_effect = lambda: deepcopy(recovered_homes)
+    recovered_homes = [dict(SMART_HOMES[0])]
+    recovered_homes[0] = {
+        **SMART_HOMES[0],
+        "zones": [
+            {
+                **SMART_HOMES[0]["zones"][0],
+                "devices": [
+                    {
+                        **SMART_HOMES[0]["zones"][0]["devices"][0],
+                        "temperature_air": "700",
+                    }
+                ],
+            }
+        ],
+    }
+    mock_watts_client.async_get_snapshot.side_effect = None
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(
+        recovered_homes
+    )
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
     # Assert - Verify availability, recovery, and one-time logging.
     assert state_while_offline == STATE_UNAVAILABLE
     assert len(errors_while_offline) == 1
+    assert snapshot_while_offline is previous_snapshot
+    assert coordinator.data is not previous_snapshot
     assert float(_state(hass, temperature_id).state) == pytest.approx(21.1111111111)
     assert coordinator.last_update_success
 

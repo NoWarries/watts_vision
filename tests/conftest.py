@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.watts_vision.api import (
+    WattsVisionSmartHome,
+    WattsVisionSnapshot,
+)
 from custom_components.watts_vision.const import DOMAIN
 
 if TYPE_CHECKING:
@@ -59,6 +63,27 @@ LAST_COMMUNICATION = {
 }
 
 
+def snapshot_from_data(
+    smart_homes: list[dict[str, object]] | None = None,
+    last_communication: dict[str, object] | None = None,
+) -> WattsVisionSnapshot:
+    """Build an immutable snapshot from API-shaped test data."""
+    homes = deepcopy(smart_homes if smart_homes is not None else SMART_HOMES)
+    communication = deepcopy(
+        last_communication if last_communication is not None else LAST_COMMUNICATION
+    )
+    return WattsVisionSnapshot(
+        smart_homes=tuple(
+            WattsVisionSmartHome.from_api(
+                home,
+                {"zones": home["zones"]},
+                communication,
+            )
+            for home in homes
+        )
+    )
+
+
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading custom integrations in every test."""
@@ -84,17 +109,15 @@ def config_entry(hass: HomeAssistant) -> MockConfigEntry:
 
 
 @pytest.fixture
-def mock_watts_api() -> Generator[MagicMock]:
-    """Return a mocked Watts Vision API client."""
+def mock_watts_client() -> Generator[MagicMock]:
+    """Return a mocked asynchronous Watts Vision client."""
     with patch(
-        "custom_components.watts_vision.WattsApi",
+        "custom_components.watts_vision.WattsVisionClient",
         autospec=True,
     ) as api_class:
         client: MagicMock = api_class.return_value
-        client.load_data.return_value = True
-        client.get_smart_homes.side_effect = lambda: deepcopy(SMART_HOMES)
-        client.get_last_communication.return_value = deepcopy(LAST_COMMUNICATION)
-        client.push_temperature.return_value = True
+        client.async_get_snapshot = AsyncMock(return_value=snapshot_from_data())
+        client.async_set_temperature = AsyncMock(return_value=None)
         yield client
 
 
@@ -102,10 +125,10 @@ def mock_watts_api() -> Generator[MagicMock]:
 async def setup_integration(
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    mock_watts_api: MagicMock,
+    mock_watts_client: MagicMock,
 ) -> MockConfigEntry:
     """Set up the Watts Vision integration."""
-    _ = mock_watts_api
+    _ = mock_watts_client
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     return config_entry

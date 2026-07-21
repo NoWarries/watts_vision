@@ -13,10 +13,11 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .api import WattsVisionClient
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .coordinator import WattsVisionDataUpdateCoordinator
-from .watts_api import WattsApi
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -39,20 +40,24 @@ async def async_setup_entry(
     entry: WattsVisionConfigEntry,
 ) -> bool:
     """Set up Watts Vision from a config entry."""
-    client = WattsApi(entry.data[CONF_USERNAME], entry.data[CONF_PASSWORD])
+    client = WattsVisionClient(
+        entry.data[CONF_USERNAME],
+        entry.data[CONF_PASSWORD],
+        session=async_get_clientsession(hass),
+    )
     coordinator = WattsVisionDataUpdateCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 
     device_registry = dr.async_get(hass)
     for smart_home in coordinator.data.smart_homes:
-        smart_home_id = str(smart_home["smarthome_id"])
+        smart_home_id = smart_home.smart_home_id
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, smart_home_id)},
-            connections={(dr.CONNECTION_NETWORK_MAC, str(smart_home["mac_address"]))},
+            connections={(dr.CONNECTION_NETWORK_MAC, smart_home.mac_address)},
             manufacturer="Watts",
-            name=f"Central Unit {smart_home['label']}",
+            name=f"Central Unit {smart_home.label}",
             model="BT-CT02-RF",
         )
 
