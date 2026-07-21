@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from copy import deepcopy
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
@@ -85,8 +86,11 @@ def snapshot_from_data(
 
 
 @pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
-    """Enable loading custom integrations in every test."""
+def auto_enable_custom_integrations(request: pytest.FixtureRequest) -> None:
+    """Enable custom integrations when the Home Assistant plugin is available."""
+    # The API-only suite intentionally runs without the Unix-only HA plugin.
+    with suppress(pytest.FixtureLookupError):
+        request.getfixturevalue("enable_custom_integrations")
 
 
 @pytest.fixture
@@ -102,7 +106,7 @@ def config_entry(hass: HomeAssistant) -> MockConfigEntry:
         options={CONF_SCAN_INTERVAL: 300},
         unique_id="user@example.com",
         version=1,
-        minor_version=2,
+        minor_version=3,
     )
     entry.add_to_hass(hass)
     return entry

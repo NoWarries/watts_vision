@@ -15,10 +15,14 @@ from aioresponses import aioresponses
 from custom_components.watts_vision.api import (
     WattsVisionAuthenticationError,
     WattsVisionClient,
+    WattsVisionCommunicationAge,
     WattsVisionConnectionError,
     WattsVisionDevice,
     WattsVisionDeviceMode,
     WattsVisionResponseError,
+    WattsVisionSmartHome,
+    WattsVisionSnapshot,
+    WattsVisionZone,
 )
 from custom_components.watts_vision.api.const import API_URL, AUTH_URL
 
@@ -176,6 +180,89 @@ async def test_expired_token_refresh_rejection_falls_back_to_credentials() -> No
         assert grants == ["password", "refresh_token", "password"]
 
 
+async def test_concurrent_expired_token_refresh_is_serialized() -> None:
+    """Test concurrent requests share one refresh-token grant."""
+    expired_response = {**AUTH_RESPONSE, "expires_in": 0}
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=expired_response)
+        _post(mocked_responses, PUSH_URL, payload=SUCCESS_RESPONSE, repeat=True)
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+            await client.async_set_temperature(
+                "home-1", "device-1", 68.0, WattsVisionDeviceMode.COMFORT
+            )
+
+            await asyncio.gather(
+                client.async_set_temperature(
+                    "home-1", "device-1", 62.0, WattsVisionDeviceMode.ECO
+                ),
+                client.async_set_temperature(
+                    "home-1", "device-2", 72.0, WattsVisionDeviceMode.BOOST
+                ),
+            )
+
+        grants = [
+            request.kwargs["data"]["grant_type"]
+            for request in _recorded_requests(mocked_responses, AUTH_URL)
+        ]
+        assert grants == ["password", "refresh_token"]
+
+
+async def test_authenticated_request_retries_once_after_unauthorized() -> None:
+    """Test an API 401 forces a token refresh and one request retry."""
+    refreshed_auth = {**AUTH_RESPONSE, "access_token": "replacement-token"}
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        _post(mocked_responses, PUSH_URL, status=HTTPStatus.UNAUTHORIZED)
+        _post(mocked_responses, AUTH_URL, payload=refreshed_auth)
+        _post(mocked_responses, PUSH_URL, payload=SUCCESS_RESPONSE)
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+
+            await client.async_set_temperature(
+                "home-1", "device-1", 68.0, WattsVisionDeviceMode.COMFORT
+            )
+
+        assert (
+            len(_recorded_requests(mocked_responses, AUTH_URL))
+            == EXPECTED_COMMAND_COUNT
+        )
+        assert [
+            request.kwargs["data"]["grant_type"]
+            for request in _recorded_requests(mocked_responses, AUTH_URL)
+        ] == ["password", "refresh_token"]
+        requests = _recorded_requests(mocked_responses, PUSH_URL)
+        assert len(requests) == EXPECTED_COMMAND_COUNT
+        assert requests[0].kwargs["headers"]["Authorization"] == "Bearer access-token"
+        assert requests[1].kwargs["headers"]["Authorization"] == (
+            "Bearer replacement-token"
+        )
+
+
+async def test_persistent_unauthorized_response_requires_reauthentication() -> None:
+    """Test a second API 401 is exposed as an authentication failure."""
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE, repeat=True)
+        _post(
+            mocked_responses,
+            PUSH_URL,
+            status=HTTPStatus.UNAUTHORIZED,
+            repeat=True,
+        )
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+
+            with pytest.raises(WattsVisionAuthenticationError):
+                await client.async_set_temperature(
+                    "home-1", "device-1", 68.0, WattsVisionDeviceMode.COMFORT
+                )
+
+        assert len(_recorded_requests(mocked_responses, PUSH_URL)) == (
+            EXPECTED_COMMAND_COUNT
+        )
+
+
 @pytest.mark.parametrize(
     ("response_kwargs", "expected_error"),
     [
@@ -266,6 +353,8 @@ async def test_snapshot_is_coherent_typed_and_assembled_for_all_homes() -> None:
         assert not device.is_cooling
         assert device.battery_low
         assert snapshot.smart_homes[0].last_communication.days == 1
+        assert snapshot.get_smart_home("home-1") is snapshot.smart_homes[0]
+        assert snapshot.get_device("home-1", device.device_id) is device
         with pytest.raises(FrozenInstanceError):
             device.air_temperature = 20.0
 
@@ -274,10 +363,24 @@ async def test_snapshot_is_coherent_typed_and_assembled_for_all_homes() -> None:
     "invalid_device_update",
     [
         {"temperature_air": "not-a-number"},
+        {"temperature_air": "nan"},
+        {"max_set_point": "inf"},
         {"heating_up": "unsupported"},
         {"error_code": None},
+        {"id": " "},
+        {"id_device": ""},
+        {"min_set_point": "901", "max_set_point": "900"},
     ],
-    ids=("temperature", "boolean", "missing-flag"),
+    ids=(
+        "temperature",
+        "not-a-number",
+        "non-finite",
+        "boolean",
+        "missing-flag",
+        "empty-device-id",
+        "empty-api-id",
+        "inverted-range",
+    ),
 )
 async def test_snapshot_rejects_malformed_required_device_values(
     invalid_device_update: dict[str, object],
@@ -324,6 +427,40 @@ async def test_snapshot_rejects_malformed_required_device_values(
         assert len(_recorded_requests(mocked_responses, USER_URL)) == 1
         assert len(_recorded_requests(mocked_responses, HOME_URL)) == 1
         assert len(_recorded_requests(mocked_responses, COMMUNICATION_URL)) == 1
+
+
+@pytest.mark.parametrize("field", ["days", "hours", "minutes", "seconds"])
+def test_communication_age_rejects_negative_values(field: str) -> None:
+    """Test every negative communication-age component is rejected."""
+    values = {"days": 0, "hours": 0, "minutes": 0, "seconds": 0, field: -1}
+
+    with pytest.raises(WattsVisionResponseError):
+        WattsVisionCommunicationAge.from_api({"diffObj": values})
+
+
+def test_snapshot_rejects_duplicate_identifiers() -> None:
+    """Test immutable indexes reject ambiguous home and thermostat IDs."""
+    device = WattsVisionDevice.from_api(_device())
+    communication = WattsVisionCommunicationAge(0, 0, 0, 0)
+    home = WattsVisionSmartHome(
+        smart_home_id="home-1",
+        label="Home",
+        mac_address="00:11:22:33:44:55",
+        zones=(WattsVisionZone(label="Living", devices=(device, device)),),
+        last_communication=communication,
+    )
+    with pytest.raises(WattsVisionResponseError):
+        WattsVisionSnapshot(smart_homes=(home,))
+
+    snapshot_home = WattsVisionSmartHome(
+        smart_home_id="home-2",
+        label="Other",
+        mac_address="00:11:22:33:44:66",
+        zones=(),
+        last_communication=communication,
+    )
+    with pytest.raises(WattsVisionResponseError):
+        WattsVisionSnapshot(smart_homes=(snapshot_home, snapshot_home))
 
 
 @pytest.mark.parametrize(
@@ -497,8 +634,8 @@ async def test_temperature_command_raises_response_error(
     """Test unsuccessful command responses raise a typed response error."""
     # Arrange - Register an unsuccessful command response.
     with aioresponses() as mocked_responses:
-        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
-        _post(mocked_responses, PUSH_URL, **api_response)
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE, repeat=True)
+        _post(mocked_responses, PUSH_URL, repeat=True, **api_response)
         async with ClientSession() as session:
             client = WattsVisionClient("user@example.com", "secret", session=session)
 
@@ -509,4 +646,9 @@ async def test_temperature_command_raises_response_error(
                 )
 
         # Assert - Verify the command was attempted once.
-        assert len(_recorded_requests(mocked_responses, PUSH_URL)) == 1
+        expected_requests = (
+            EXPECTED_COMMAND_COUNT
+            if api_response.get("status") == HTTPStatus.UNAUTHORIZED
+            else 1
+        )
+        assert len(_recorded_requests(mocked_responses, PUSH_URL)) == expected_requests

@@ -31,7 +31,6 @@ def _thermostat_device_info(context: WattsVisionEntityContext) -> DeviceInfo:
         "identifiers": {(DOMAIN, context.device_id)},
         "manufacturer": "Watts",
         "name": f"Thermostat {context.zone}",
-        "model": "BT-D03-RF",
         "suggested_area": context.zone,
     }
     # Home Assistant 2026.8 replaces identifier-based parents with registry IDs.

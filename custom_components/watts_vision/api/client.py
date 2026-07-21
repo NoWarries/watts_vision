@@ -162,42 +162,50 @@ class WattsVisionClient:
         data: dict[str, str],
     ) -> JsonObject:
         """Post to an authenticated API endpoint."""
-        access_token = await self._auth.async_get_access_token()
-        try:
-            async with self._session.post(
-                f"{API_URL}{path}",
-                headers={"Authorization": f"Bearer {access_token}"},
-                data=data,
-                timeout=ClientTimeout(total=REQUEST_TIMEOUT),
-            ) as response:
-                response_status = response.status
-                response_data: Any = (
-                    await response.json(content_type=None)
-                    if response_status == HTTPStatus.OK
-                    else None
-                )
-        except (TimeoutError, ClientError) as err:
-            msg = "Unable to contact the Watts Vision API"
-            raise WattsVisionConnectionError(msg) from err
-        except (TypeError, ValueError) as err:
-            msg = "Watts Vision returned malformed JSON"
-            raise WattsVisionResponseError(msg) from err
+        for attempt in range(2):
+            access_token = await self._auth.async_get_access_token(
+                force_refresh=attempt == 1
+            )
+            try:
+                async with self._session.post(
+                    f"{API_URL}{path}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    data=data,
+                    timeout=ClientTimeout(total=REQUEST_TIMEOUT),
+                ) as response:
+                    response_status = response.status
+                    response_data: Any = (
+                        await response.json(content_type=None)
+                        if response_status == HTTPStatus.OK
+                        else None
+                    )
+            except (TimeoutError, ClientError) as err:
+                msg = "Unable to contact the Watts Vision API"
+                raise WattsVisionConnectionError(msg) from err
+            except (TypeError, ValueError) as err:
+                msg = "Watts Vision returned malformed JSON"
+                raise WattsVisionResponseError(msg) from err
 
-        if response_status == HTTPStatus.UNAUTHORIZED:
-            msg = "Watts Vision authentication is no longer valid"
-            raise WattsVisionAuthenticationError(msg)
-        if response_status != HTTPStatus.OK:
-            msg = f"Watts Vision returned HTTP status {response_status}"
-            raise WattsVisionResponseError(msg)
+            if response_status == HTTPStatus.UNAUTHORIZED and attempt == 0:
+                continue
+            if response_status == HTTPStatus.UNAUTHORIZED:
+                msg = "Watts Vision authentication is no longer valid"
+                raise WattsVisionAuthenticationError(msg)
+            if response_status != HTTPStatus.OK:
+                msg = f"Watts Vision returned HTTP status {response_status}"
+                raise WattsVisionResponseError(msg)
 
-        if not isinstance(response_data, dict):
-            msg = "Watts Vision returned a non-object JSON response"
-            raise WattsVisionResponseError(msg)
-        code = response_data.get("code")
-        if not isinstance(code, dict) or "OK" not in str(code.get("key", "")):
-            msg = f"Watts Vision rejected the request: {code}"
-            raise WattsVisionResponseError(msg)
-        return response_data
+            if not isinstance(response_data, dict):
+                msg = "Watts Vision returned a non-object JSON response"
+                raise WattsVisionResponseError(msg)
+            code = response_data.get("code")
+            if not isinstance(code, dict) or "OK" not in str(code.get("key", "")):
+                msg = f"Watts Vision rejected the request: {code}"
+                raise WattsVisionResponseError(msg)
+            return response_data
+
+        msg = "Watts Vision authentication is no longer valid"
+        raise WattsVisionAuthenticationError(msg)
 
 
 def _as_object(value: object, label: str) -> JsonObject:

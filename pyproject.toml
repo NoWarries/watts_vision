@@ -1,11 +1,12 @@
 [project]
 name = "watts-vision-dev"
-version = "0.8.0"
+version = "0.9.0"
 requires-python = ">=3.14.2,<3.15"
 dependencies = []
 
 [dependency-groups]
 lint = [
+    "mypy==2.3.0",
     "pre-commit==4.6.0",
     "ruff==0.15.22",
 ]
@@ -51,9 +52,14 @@ keep-runtime-typing = true
 docstring-code-format = true
 
 [tool.pytest.ini_options]
-addopts = "--cov=custom_components.watts_vision --cov-report=term-missing"
+addopts = "--cov=custom_components.watts_vision --cov-fail-under=95 --cov-report=term-missing"
 asyncio_mode = "auto"
 filterwarnings = [
     "error::DeprecationWarning:custom_components\\.watts_vision.*",
     "error::PendingDeprecationWarning:custom_components\\.watts_vision.*",
 ]
+
+[tool.mypy]
+python_version = "3.14"
+show_error_codes = true
+strict = true

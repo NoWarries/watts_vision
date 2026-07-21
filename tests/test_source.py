@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import tomllib
 from pathlib import Path
+from typing import Any
 
 
 def test_integration_has_no_synchronous_transport_references() -> None:
@@ -58,18 +61,63 @@ def test_integration_uses_forward_compatible_device_registry_api() -> None:
     assert not deprecated_references
 
 
-def test_battery_sensor_uses_percentage_unit_enum() -> None:
-    """Test the battery unit cannot regress to the deprecated constant."""
-    # Arrange - Read the battery sensor platform source.
-    sensor_path = (
+def test_battery_uses_a_real_binary_sensor_instead_of_percentage() -> None:
+    """Test battery state cannot regress to a fabricated percentage."""
+    integration_path = (
         Path(__file__).parents[1] / "custom_components" / "watts_vision" / "sensor.py"
     )
-    sensor_source = sensor_path.read_text(encoding="utf-8")
-
-    # Act - Locate the supported percentage-unit enum assignment.
-    uses_percentage_enum = (
-        "_attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE" in sensor_source
+    binary_sensor_path = (
+        Path(__file__).parents[1]
+        / "custom_components"
+        / "watts_vision"
+        / "binary_sensor.py"
     )
+    sensor_source = integration_path.read_text(encoding="utf-8")
+    binary_sensor_source = binary_sensor_path.read_text(encoding="utf-8")
 
-    # Assert - Verify the 2026.7-compatible enum remains in use.
-    assert uses_percentage_enum
+    assert "UnitOfRatio.PERCENTAGE" not in sensor_source
+    assert "BinarySensorDeviceClass.BATTERY" in binary_sensor_source
+
+
+def _leaf_paths(
+    data: dict[str, Any], prefix: tuple[str, ...] = ()
+) -> set[tuple[str, ...]]:
+    """Return every leaf path in a nested translation object."""
+    paths: set[tuple[str, ...]] = set()
+    for key, value in data.items():
+        path = (*prefix, key)
+        if isinstance(value, dict):
+            paths.update(_leaf_paths(value, path))
+        else:
+            paths.add(path)
+    return paths
+
+
+def test_english_and_dutch_translations_have_matching_structure() -> None:
+    """Test both supported languages contain every translation key."""
+    translation_root = (
+        Path(__file__).parents[1]
+        / "custom_components"
+        / "watts_vision"
+        / "translations"
+    )
+    english = json.loads((translation_root / "en.json").read_text(encoding="utf-8"))
+    dutch = json.loads((translation_root / "nl.json").read_text(encoding="utf-8"))
+
+    assert _leaf_paths(english) == _leaf_paths(dutch)
+    assert english["entity"]["binary_sensor"]["battery_low"]["name"] == "Battery"
+    assert dutch["entity"]["binary_sensor"]["battery_low"]["name"] == "Batterij"
+
+
+def test_manifest_and_project_versions_stay_in_sync() -> None:
+    """Test release metadata cannot publish conflicting versions."""
+    repository_root = Path(__file__).parents[1]
+    manifest = json.loads(
+        (
+            repository_root / "custom_components" / "watts_vision" / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    with (repository_root / "pyproject.toml").open("rb") as project_file:
+        project = tomllib.load(project_file)
+
+    assert manifest["version"] == project["project"]["version"]

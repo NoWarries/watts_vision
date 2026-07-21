@@ -8,6 +8,7 @@ AUTH_URL = (
 )
 API_URL = "https://smarthome.wattselectronics.com/api/v0.1/human"
 REQUEST_TIMEOUT = 30
+TOKEN_EXPIRY_SAFETY_MARGIN = 30.0
 AUTH_REJECTION_STATUSES = frozenset(
     {
         HTTPStatus.BAD_REQUEST,

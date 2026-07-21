@@ -10,7 +10,12 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
-from .const import AUTH_REJECTION_STATUSES, AUTH_URL, REQUEST_TIMEOUT
+from .const import (
+    AUTH_REJECTION_STATUSES,
+    AUTH_URL,
+    REQUEST_TIMEOUT,
+    TOKEN_EXPIRY_SAFETY_MARGIN,
+)
 from .exceptions import (
     WattsVisionAuthenticationError,
     WattsVisionConnectionError,
@@ -38,11 +43,17 @@ class WattsVisionAuth:
         self._refresh_token_expires_at = 0.0
         self._lock = asyncio.Lock()
 
-    async def async_get_access_token(self, *, force_login: bool = False) -> str:
+    async def async_get_access_token(
+        self,
+        *,
+        force_login: bool = False,
+        force_refresh: bool = False,
+    ) -> str:
         """Return a valid access token."""
         now = time.monotonic()
         if (
             not force_login
+            and not force_refresh
             and self._access_token is not None
             and self._access_token_expires_at > now
         ):
@@ -52,6 +63,7 @@ class WattsVisionAuth:
             now = time.monotonic()
             if (
                 not force_login
+                and not force_refresh
                 and self._access_token is not None
                 and self._access_token_expires_at > now
             ):
@@ -134,9 +146,9 @@ class WattsVisionAuth:
 
         now = time.monotonic()
         self._access_token = access_token
-        self._access_token_expires_at = now + access_expires_in
+        self._access_token_expires_at = now + _safe_expiry_duration(access_expires_in)
         self._refresh_token = refresh_token
-        self._refresh_token_expires_at = now + refresh_expires_in
+        self._refresh_token_expires_at = now + _safe_expiry_duration(refresh_expires_in)
         return access_token
 
 
@@ -154,3 +166,8 @@ def _required_duration(data: dict[str, Any], key: str) -> float:
     if not math.isfinite(value) or value < 0:
         raise ValueError
     return value
+
+
+def _safe_expiry_duration(duration: float) -> float:
+    """Return an expiry duration with a clock and network safety margin."""
+    return max(duration - TOKEN_EXPIRY_SAFETY_MARGIN, duration * 0.9)

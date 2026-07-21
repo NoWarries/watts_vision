@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,11 +12,11 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WattsVisionClient
-from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import DEFAULT_SCAN_INTERVAL
 from .coordinator import WattsVisionDataUpdateCoordinator
 from .runtime import WattsVisionRuntimeData
 
@@ -32,9 +31,32 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform.CLIMATE,
 )
 CONFIG_ENTRY_VERSION = 1
-CONFIG_ENTRY_MINOR_VERSION = 2
+CONFIG_ENTRY_MINOR_VERSION = 3
 
 type WattsVisionConfigEntry = ConfigEntry[WattsVisionRuntimeData]
+
+
+def _async_remove_retired_entities(
+    hass: HomeAssistant,
+    entry: WattsVisionConfigEntry,
+) -> None:
+    """Remove registry entries for retired fabricated compatibility sensors."""
+    entity_registry = er.async_get(hass)
+    for registry_entry in er.async_entries_for_config_entry(
+        entity_registry,
+        entry.entry_id,
+    ):
+        unique_id = registry_entry.unique_id
+        is_retired_battery = unique_id.startswith(
+            "battery_"
+        ) and not unique_id.startswith("battery_low_")
+        is_retired_communication_age = unique_id.startswith(
+            "last_communication_"
+        ) and not unique_id.startswith("last_communication_timestamp_")
+        if registry_entry.platform == entry.domain and (
+            is_retired_battery or is_retired_communication_age
+        ):
+            entity_registry.async_remove(registry_entry.entity_id)
 
 
 async def async_setup_entry(
@@ -47,26 +69,18 @@ async def async_setup_entry(
         entry.data[CONF_PASSWORD],
         session=async_get_clientsession(hass),
     )
-    coordinator = WattsVisionDataUpdateCoordinator(hass, entry, client)
-    await coordinator.async_config_entry_first_refresh()
-
-    device_registry = dr.async_get(hass)
     parent_device_ids: dict[str, str] = {}
-    for smart_home in coordinator.data.smart_homes:
-        smart_home_id = smart_home.smart_home_id
-        parent_device = device_registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, smart_home_id)},
-            connections={(dr.CONNECTION_NETWORK_MAC, smart_home.mac_address)},
-            manufacturer="Watts",
-            name=f"Central Unit {smart_home.label}",
-            model="BT-CT02-RF",
-        )
-        parent_device_ids[smart_home_id] = parent_device.id
+    coordinator = WattsVisionDataUpdateCoordinator(
+        hass,
+        entry,
+        client,
+        parent_device_ids,
+    )
+    await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = WattsVisionRuntimeData(
         coordinator=coordinator,
-        parent_device_ids=MappingProxyType(parent_device_ids),
+        parent_device_ids=parent_device_ids,
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -108,6 +122,8 @@ async def async_migrate_entry(
     if unique_id is None and not duplicate_unique_id:
         unique_id = candidate_unique_id
 
+    _async_remove_retired_entities(hass, entry)
+
     hass.config_entries.async_update_entry(
         entry,
         data=data,
@@ -115,5 +131,5 @@ async def async_migrate_entry(
         unique_id=unique_id,
         minor_version=CONFIG_ENTRY_MINOR_VERSION,
     )
-    _LOGGER.info("Migrated Watts Vision config entry to version 1.2")
+    _LOGGER.info("Migrated Watts Vision config entry to version 1.3")
     return True

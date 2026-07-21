@@ -59,6 +59,9 @@
     "device_unavailable": {
       "message": "Watts Vision device {device_id} is unavailable"
     },
+    "hvac_mode_unsupported": {
+      "message": "HVAC mode {mode} is not supported by this thermostat"
+    },
     "temperature_limits_unavailable": {
       "message": "The thermostat temperature limits are unavailable"
     },
@@ -77,6 +80,9 @@
   },
   "entity": {
     "binary_sensor": {
+      "battery_low": {
+        "name": "Battery"
+      },
       "heating": {
         "name": "Heating"
       }
@@ -85,20 +91,39 @@
       "air_temperature": {
         "name": "Air temperature"
       },
-      "battery": {
-        "name": "Battery"
-      },
       "last_communication": {
         "name": "Last communication"
       },
       "preset_mode": {
-        "name": "Preset mode"
+        "name": "Preset mode",
+        "state": {
+          "boost": "Boost",
+          "comfort": "Comfort",
+          "eco": "Eco",
+          "fan": "Fan",
+          "fan_disabled": "Fan disabled",
+          "frost": "Frost protection",
+          "manual": "Manual",
+          "off": "Off",
+          "program": "Program",
+          "unknown": "Unknown"
+        }
       },
       "target_temperature": {
         "name": "Target temperature"
       },
       "temperature_mode": {
-        "name": "Temperature mode"
+        "name": "Temperature mode",
+        "state": {
+          "boost": "Boost",
+          "comfort": "Comfort",
+          "current": "Current",
+          "eco": "Eco",
+          "frost": "Frost protection",
+          "manual": "Manual",
+          "none": "None",
+          "target": "Target"
+        }
       }
     }
   }

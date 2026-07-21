@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, override
+from typing import TYPE_CHECKING, Any, override
 
-from homeassistant.components.climate import (
-    ATTR_TEMPERATURE,
-    ClimateEntity,
+from homeassistant.components.climate import ClimateEntity
+from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACAction,
     HVACMode,
 )
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
@@ -45,6 +44,21 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 1
 
+PROGRAM_MODES = frozenset(
+    {
+        WattsVisionDeviceMode.PROGRAM_BOOST,
+        WattsVisionDeviceMode.PROGRAM_COMFORT,
+        WattsVisionDeviceMode.PROGRAM_ECO,
+        WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
+    }
+)
+OFF_MODES = frozenset(
+    {
+        WattsVisionDeviceMode.FAN_DISABLED,
+        WattsVisionDeviceMode.OFF,
+    }
+)
+
 
 async def async_setup_entry(
     _hass: HomeAssistant,
@@ -54,42 +68,62 @@ async def async_setup_entry(
     """Set up Watts Vision climate entities."""
     runtime_data = config_entry.runtime_data
     coordinator = runtime_data.coordinator
-    entities: list[ClimateEntity] = []
-    for smart_home in coordinator.data.smart_homes:
-        smart_home_id = smart_home.smart_home_id
-        for zone in smart_home.zones:
-            entities.extend(
+    known_devices: set[tuple[str, str]] = set()
+
+    @callback
+    def async_add_new_entities() -> None:
+        """Add thermostats discovered in a later coordinator snapshot."""
+        current_devices: dict[
+            tuple[str, str], tuple[WattsVisionEntityContext, str]
+        ] = {}
+        for smart_home in coordinator.data.smart_homes:
+            smart_home_id = smart_home.smart_home_id
+            for zone in smart_home.zones:
+                for device in zone.devices:
+                    key = (smart_home_id, device.device_id)
+                    current_devices[key] = (
+                        WattsVisionEntityContext(
+                            smart_home_id=smart_home_id,
+                            device_id=device.device_id,
+                            zone=zone.label,
+                            parent_device_id=runtime_data.parent_device_ids[
+                                smart_home_id
+                            ],
+                        ),
+                        device.api_device_id,
+                    )
+        new_devices = current_devices.keys() - known_devices
+        if new_devices:
+            async_add_entities(
                 WattsThermostat(
                     coordinator,
-                    WattsVisionEntityContext(
-                        smart_home_id=smart_home_id,
-                        device_id=device.device_id,
-                        zone=zone.label,
-                        parent_device_id=runtime_data.parent_device_ids[smart_home_id],
-                    ),
-                    device.api_device_id,
+                    current_devices[key][0],
+                    current_devices[key][1],
                 )
-                for device in zone.devices
+                for key in new_devices
             )
+            known_devices.update(new_devices)
 
-    async_add_entities(entities)
+    async_add_new_entities()
+    config_entry.async_on_unload(coordinator.async_add_listener(async_add_new_entities))
 
 
 class WattsThermostat(WattsVisionEntity, ClimateEntity):
     """Represent a Watts Vision thermostat."""
 
-    _attr_hvac_modes: ClassVar[list[HVACMode]] = [
-        HVACMode.HEAT,
-        HVACMode.COOL,
-        HVACMode.OFF,
-    ]
-    _attr_preset_modes: ClassVar[list[str]] = [
-        mode.value for mode in AVAILABLE_HEAT_MODES
-    ]
     _attr_supported_features = (
-        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+        ClimateEntityFeature.PRESET_MODE
+        | ClimateEntityFeature.TARGET_TEMPERATURE
+        | ClimateEntityFeature.TURN_OFF
+        | ClimateEntityFeature.TURN_ON
     )
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
+    _unrecorded_attributes = frozenset(
+        {
+            *TEMP_TYPE_TO_STATE_ATTRIBUTE.values(),
+            "gv_mode",
+        }
+    )
 
     def __init__(
         self,
@@ -102,7 +136,10 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         self._api_device_id = api_device_id
         self._attr_unique_id = f"watts_thermostat_{context.device_id}"
         self._attr_name = None
-        self._attr_extra_state_attributes = {"previous_gv_mode": "0"}
+        self._attr_preset_modes = [mode.value for mode in AVAILABLE_HEAT_MODES]
+        self._attr_target_temperature_step = 1.0
+        self._attr_extra_state_attributes = {}
+        self._previous_device_mode = WattsVisionDeviceMode.COMFORT
         self._update_from_coordinator()
 
     def _update_from_coordinator(self) -> None:
@@ -112,6 +149,11 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
             return
 
         device_mode = device.mode
+        if (
+            device_mode not in OFF_MODES
+            and device_mode is not WattsVisionDeviceMode.UNKNOWN
+        ):
+            self._previous_device_mode = device_mode
         self._attr_current_temperature = device.air_temperature
         if device_mode is WattsVisionDeviceMode.FROST:
             self._attr_min_temp = 44.6
@@ -122,29 +164,35 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
 
         if not device.is_heating:
             self._attr_hvac_action = (
-                HVACAction.OFF
-                if device_mode
-                in {
-                    WattsVisionDeviceMode.OFF,
-                    WattsVisionDeviceMode.FAN_DISABLED,
-                }
-                else HVACAction.IDLE
+                HVACAction.OFF if device_mode in OFF_MODES else HVACAction.IDLE
             )
         elif device.is_cooling:
             self._attr_hvac_action = HVACAction.COOLING
         else:
             self._attr_hvac_action = HVACAction.HEATING
 
+        seasonal_mode = HVACMode.COOL if device.is_cooling else HVACMode.HEAT
+        self._attr_hvac_modes = [seasonal_mode, HVACMode.AUTO, HVACMode.OFF]
         mode_info = DEVICE_TO_MODE_TYPE[device_mode]
-        self._attr_preset_mode = mode_info.heat_mode.value
-        if device_mode in {
-            WattsVisionDeviceMode.OFF,
-            WattsVisionDeviceMode.FAN_DISABLED,
-        }:
+        if device_mode in OFF_MODES:
             self._attr_hvac_mode = HVACMode.OFF
+            self._attr_preset_mode = None
             self._attr_target_temperature = None
+        elif device_mode in PROGRAM_MODES:
+            self._attr_hvac_mode = HVACMode.AUTO
+            self._attr_preset_mode = (
+                mode_info.temp_type.value
+                if mode_info.temp_type is not TempType.NONE
+                else None
+            )
+            self._attr_target_temperature = device.target_temperature
         else:
-            self._attr_hvac_mode = HVACMode.COOL if device.is_cooling else HVACMode.HEAT
+            self._attr_hvac_mode = seasonal_mode
+            self._attr_preset_mode = (
+                mode_info.heat_mode.value
+                if mode_info.heat_mode is not HeatMode.UNKNOWN
+                else None
+            )
             self._attr_target_temperature = device.target_temperature
 
         for temperature_type in AVAILABLE_TEMP_TYPES:
@@ -173,29 +221,33 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set the HVAC mode."""
         device = self._require_device()
-        current_mode = device.mode
-        if hvac_mode == HVACMode.OFF:
-            self._attr_extra_state_attributes["previous_gv_mode"] = device.wire_mode
+        seasonal_mode = HVACMode.COOL if device.is_cooling else HVACMode.HEAT
+        if hvac_mode is HVACMode.OFF:
+            if device.mode not in OFF_MODES:
+                self._previous_device_mode = device.mode
             device_mode = HEAT_MODE_TO_DEVICE[HeatMode.OFF]
             value = 0.0
-        else:
-            try:
-                device_mode = WattsVisionDeviceMode(
-                    str(
-                        self._attr_extra_state_attributes.get(
-                            "previous_gv_mode",
-                            current_mode.value,
-                        )
-                    )
-                )
-            except ValueError:
-                device_mode = HEAT_MODE_TO_DEVICE[HeatMode.COMFORT]
-            if device_mode in {
-                WattsVisionDeviceMode.OFF,
-                WattsVisionDeviceMode.UNKNOWN,
-            }:
-                device_mode = HEAT_MODE_TO_DEVICE[HeatMode.COMFORT]
+        elif hvac_mode is HVACMode.AUTO:
+            device_mode = (
+                self._previous_device_mode
+                if self._previous_device_mode in PROGRAM_MODES
+                else WattsVisionDeviceMode.PROGRAM_ECO
+            )
             value = self._temperature_for_mode(device, device_mode)
+        elif hvac_mode is seasonal_mode:
+            device_mode = (
+                device.mode
+                if device.mode not in OFF_MODES | PROGRAM_MODES
+                and device.mode is not WattsVisionDeviceMode.UNKNOWN
+                else WattsVisionDeviceMode.COMFORT
+            )
+            value = self._temperature_for_mode(device, device_mode)
+        else:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="hvac_mode_unsupported",
+                translation_placeholders={"mode": hvac_mode},
+            )
 
         value = self._clamp_temperature(value)
         await self._async_push_temperature(
@@ -209,15 +261,18 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         """Set the thermostat preset mode."""
         device = self._require_device()
         heat_mode = HeatMode(preset_mode)
+        if heat_mode is HeatMode.OFF:
+            await self.async_turn_off()
+            return
+        if heat_mode is HeatMode.PROGRAM:
+            await self.async_set_hvac_mode(HVACMode.AUTO)
+            return
         device_mode = HEAT_MODE_TO_DEVICE[heat_mode]
         if heat_mode in {
-            HeatMode.OFF,
-            HeatMode.PROGRAM,
             HeatMode.FAN,
             HeatMode.FAN_DISABLED,
         }:
             value = 0.0
-            self._attr_extra_state_attributes["previous_gv_mode"] = device.wire_mode
         else:
             value = self._clamp_temperature(
                 self._temperature_for_mode(device, device_mode)
@@ -245,12 +300,31 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
                 translation_placeholders={"mode": mode_info.heat_mode.value},
             )
 
-        value = self._clamp_temperature(float(int(kwargs[ATTR_TEMPERATURE])))
+        value = self._clamp_temperature(float(round(kwargs[ATTR_TEMPERATURE])))
         await self._async_push_temperature(
             value,
             device_mode,
             device.with_target_temperature(value),
         )
+
+    @override
+    async def async_turn_on(self) -> None:
+        """Turn on the thermostat using the last known active device mode."""
+        device = self._require_device()
+        device_mode = self._previous_device_mode
+        if device_mode in OFF_MODES or device_mode is WattsVisionDeviceMode.UNKNOWN:
+            device_mode = WattsVisionDeviceMode.COMFORT
+        value = self._clamp_temperature(self._temperature_for_mode(device, device_mode))
+        await self._async_push_temperature(
+            value,
+            device_mode,
+            device.with_mode(device_mode, value),
+        )
+
+    @override
+    async def async_turn_off(self) -> None:
+        """Turn off the thermostat."""
+        await self.async_set_hvac_mode(HVACMode.OFF)
 
     def _require_device(self) -> WattsVisionDevice:
         """Return the cached device or raise when unavailable."""

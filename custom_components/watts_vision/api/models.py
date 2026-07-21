@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import math
+from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from enum import StrEnum
-from typing import Any, Self
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Self
 
 from .exceptions import WattsVisionResponseError
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 type JsonObject = dict[str, Any]
 
@@ -43,10 +49,19 @@ class WattsVisionCommunicationAge:
         """Parse a communication age response."""
         difference = _required_object(data, "diffObj")
         return cls(
-            days=_required_int(difference, "days"),
-            hours=_required_int(difference, "hours"),
-            minutes=_required_int(difference, "minutes"),
-            seconds=_required_int(difference, "seconds"),
+            days=_required_non_negative_int(difference, "days"),
+            hours=_required_non_negative_int(difference, "hours"),
+            minutes=_required_non_negative_int(difference, "minutes"),
+            seconds=_required_non_negative_int(difference, "seconds"),
+        )
+
+    def as_timedelta(self) -> timedelta:
+        """Return the communication age as a duration."""
+        return timedelta(
+            days=self.days,
+            hours=self.hours,
+            minutes=self.minutes,
+            seconds=self.seconds,
         )
 
 
@@ -73,15 +88,15 @@ class WattsVisionDevice:
     @classmethod
     def from_api(cls, data: JsonObject) -> Self:
         """Parse a thermostat response."""
-        wire_mode = _required_string(data, "gv_mode")
+        wire_mode = _required_non_empty_string(data, "gv_mode")
         try:
             mode = WattsVisionDeviceMode(wire_mode)
         except ValueError:
             # Preserve availability when Watts adds a mode before we model it.
             mode = WattsVisionDeviceMode.UNKNOWN
-        return cls(
-            device_id=_required_string(data, "id"),
-            api_device_id=_required_string(data, "id_device"),
+        device = cls(
+            device_id=_required_non_empty_string(data, "id"),
+            api_device_id=_required_non_empty_string(data, "id_device"),
             mode=mode,
             wire_mode=wire_mode,
             is_heating=_required_boolean(data, "heating_up"),
@@ -96,6 +111,10 @@ class WattsVisionDevice:
             manual_temperature=_required_temperature(data, "consigne_manuel"),
             boost_temperature=_required_temperature(data, "consigne_boost"),
         )
+        if device.min_temperature > device.max_temperature:
+            msg = "Watts Vision returned inverted thermostat temperature limits"
+            raise WattsVisionResponseError(msg)
+        return device
 
     @property
     def target_temperature(self) -> float | None:
@@ -141,23 +160,37 @@ class WattsVisionDevice:
 
     def with_target_temperature(self, temperature: float) -> Self:
         """Return a copy with an optimistic target-temperature update."""
-        changes: dict[str, float] = {"manual_temperature": temperature}
         if self.mode is WattsVisionDeviceMode.FROST:
-            changes["frost_temperature"] = temperature
-        elif self.mode in {
+            return replace(
+                self,
+                frost_temperature=temperature,
+                manual_temperature=temperature,
+            )
+        if self.mode in {
             WattsVisionDeviceMode.ECO,
             WattsVisionDeviceMode.PROGRAM_ECO,
         }:
-            changes["eco_temperature"] = temperature
-        elif self.mode is WattsVisionDeviceMode.BOOST:
-            changes["boost_temperature"] = temperature
-        elif self.mode is WattsVisionDeviceMode.MANUAL:
-            changes["manual_temperature"] = temperature
-        elif self.mode is WattsVisionDeviceMode.PROGRAM_BOOST:
-            changes["boost_temperature"] = temperature
-        else:
-            changes["comfort_temperature"] = temperature
-        return replace(self, **changes)
+            return replace(
+                self,
+                eco_temperature=temperature,
+                manual_temperature=temperature,
+            )
+        if self.mode in {
+            WattsVisionDeviceMode.BOOST,
+            WattsVisionDeviceMode.PROGRAM_BOOST,
+        }:
+            return replace(
+                self,
+                boost_temperature=temperature,
+                manual_temperature=temperature,
+            )
+        if self.mode is WattsVisionDeviceMode.MANUAL:
+            return replace(self, manual_temperature=temperature)
+        return replace(
+            self,
+            comfort_temperature=temperature,
+            manual_temperature=temperature,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,9 +245,9 @@ class WattsVisionSmartHome:
         """Parse a complete smart-home response."""
         zones = _required_list(zones_data, "zones")
         return cls(
-            smart_home_id=_required_string(home_data, "smarthome_id"),
+            smart_home_id=_required_non_empty_string(home_data, "smarthome_id"),
             label=_required_string(home_data, "label"),
-            mac_address=_required_string(home_data, "mac_address"),
+            mac_address=_required_non_empty_string(home_data, "mac_address"),
             zones=tuple(
                 WattsVisionZone.from_api(_as_object(zone, "zone")) for zone in zones
             ),
@@ -242,17 +275,41 @@ class WattsVisionSnapshot:
     """A coherent Watts Vision account snapshot."""
 
     smart_homes: tuple[WattsVisionSmartHome, ...]
+    _home_index: Mapping[str, WattsVisionSmartHome] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _device_index: Mapping[tuple[str, str], WattsVisionDevice] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Build immutable indexes and reject ambiguous identifiers."""
+        home_index = {home.smart_home_id: home for home in self.smart_homes}
+        if len(home_index) != len(self.smart_homes):
+            msg = "Watts Vision returned duplicate smart-home identifiers"
+            raise WattsVisionResponseError(msg)
+        device_index = {
+            (home.smart_home_id, device.device_id): device
+            for home in self.smart_homes
+            for zone in home.zones
+            for device in zone.devices
+        }
+        device_count = sum(
+            len(zone.devices) for home in self.smart_homes for zone in home.zones
+        )
+        if len(device_index) != device_count:
+            msg = "Watts Vision returned duplicate thermostat identifiers"
+            raise WattsVisionResponseError(msg)
+        object.__setattr__(self, "_home_index", MappingProxyType(home_index))
+        object.__setattr__(self, "_device_index", MappingProxyType(device_index))
 
     def get_smart_home(self, smart_home_id: str) -> WattsVisionSmartHome | None:
         """Return a smart home by identifier."""
-        return next(
-            (
-                smart_home
-                for smart_home in self.smart_homes
-                if smart_home.smart_home_id == smart_home_id
-            ),
-            None,
-        )
+        return self._home_index.get(smart_home_id)
 
     def get_device(
         self,
@@ -260,8 +317,7 @@ class WattsVisionSnapshot:
         device_id: str,
     ) -> WattsVisionDevice | None:
         """Return a thermostat by smart-home and device identifier."""
-        smart_home = self.get_smart_home(smart_home_id)
-        return smart_home.get_device(device_id) if smart_home is not None else None
+        return self._device_index.get((smart_home_id, device_id))
 
     def replace_device(
         self,
@@ -324,6 +380,15 @@ def _required_string(data: JsonObject, key: str) -> str:
     return str(value)
 
 
+def _required_non_empty_string(data: JsonObject, key: str) -> str:
+    """Return a required, non-empty string value."""
+    value = _required_string(data, key).strip()
+    if not value:
+        msg = f"Watts Vision returned empty {key} data"
+        raise WattsVisionResponseError(msg)
+    return value
+
+
 def _required_int(data: JsonObject, key: str) -> int:
     """Return a required value as an integer."""
     try:
@@ -331,6 +396,15 @@ def _required_int(data: JsonObject, key: str) -> int:
     except (KeyError, TypeError, ValueError) as err:
         msg = f"Watts Vision returned invalid {key} data"
         raise WattsVisionResponseError(msg) from err
+
+
+def _required_non_negative_int(data: JsonObject, key: str) -> int:
+    """Return a required non-negative integer."""
+    value = _required_int(data, key)
+    if value < 0:
+        msg = f"Watts Vision returned negative {key} data"
+        raise WattsVisionResponseError(msg)
+    return value
 
 
 def _required_boolean(data: JsonObject, key: str) -> bool:
@@ -345,7 +419,11 @@ def _required_boolean(data: JsonObject, key: str) -> bool:
 def _required_temperature(data: JsonObject, key: str) -> float:
     """Return a required tenths-of-a-degree value as a float."""
     try:
-        return float(data[key]) / 10
+        value = float(data[key]) / 10
     except (KeyError, TypeError, ValueError) as err:
         msg = f"Watts Vision returned invalid {key} data"
         raise WattsVisionResponseError(msg) from err
+    if not math.isfinite(value):
+        msg = f"Watts Vision returned non-finite {key} data"
+        raise WattsVisionResponseError(msg)
+    return value

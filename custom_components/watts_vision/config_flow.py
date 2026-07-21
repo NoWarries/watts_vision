@@ -46,7 +46,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the Watts Vision config flow."""
 
     VERSION = 1
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     def __init__(self) -> None:
         """Initialize a config flow."""
@@ -95,7 +95,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    @override
     async def async_step_reauth(
         self,
         _entry_data: Mapping[str, Any],
@@ -103,7 +102,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Start reauthentication after an authentication failure."""
         return await self.async_step_reauth_confirm()
 
-    @override
     async def async_step_reauth_confirm(
         self,
         user_input: dict[str, Any] | None = None,
@@ -137,7 +135,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={CONF_USERNAME: username},
         )
 
-    @override
     async def async_step_settings(
         self,
         user_input: dict[str, Any] | None = None,
@@ -171,7 +168,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
     """Handle Watts Vision options."""
 
-    @override
     async def async_step_init(
         self,
         user_input: dict[str, Any] | None = None,

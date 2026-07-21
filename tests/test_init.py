@@ -9,16 +9,22 @@ from typing import TYPE_CHECKING
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
-    ATTR_UNIT_OF_MEASUREMENT,
+    CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
-    STATE_OFF,
+    CONF_USERNAME,
     STATE_ON,
     STATE_UNAVAILABLE,
     Platform,
 )
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity_registry import RegistryEntryDisabler
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.watts_vision import (
+    CONFIG_ENTRY_MINOR_VERSION,
+    async_migrate_entry,
+)
 from custom_components.watts_vision.api import (
     WattsVisionAuthenticationError,
     WattsVisionConnectionError,
@@ -28,11 +34,12 @@ from custom_components.watts_vision.const import DEVICE_TO_MODE_TYPE, DOMAIN
 
 from .conftest import SMART_HOMES, snapshot_from_data
 
+MIGRATED_SCAN_INTERVAL = 600
+
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
 
     from homeassistant.core import HomeAssistant, State
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.watts_vision import WattsVisionConfigEntry
 
@@ -77,44 +84,49 @@ async def test_setup_creates_parent_devices_and_preserves_states(
     device_registry = dr.async_get(hass)
 
     # Act - Resolve the parent, child, and preserved entities.
-    battery_id = _entity_id(hass, Platform.SENSOR, "battery_home-1#C001-000")
-    battery_entry = er.async_get(hass).async_get(battery_id)
-    assert battery_entry is not None
-    assert battery_entry.device_id is not None
+    battery_low_id = _entity_id(
+        hass, Platform.BINARY_SENSOR, "battery_low_home-1#C001-000"
+    )
+    battery_low_entry = er.async_get(hass).async_get(battery_low_id)
+    assert battery_low_entry is not None
+    assert battery_low_entry.device_id is not None
     parent = device_registry.async_get(
         setup_integration.runtime_data.parent_device_ids["home-1"]
     )
-    child = device_registry.async_get(battery_entry.device_id)
+    child = device_registry.async_get(battery_low_entry.device_id)
     temperature_id = _entity_id(
         hass, Platform.SENSOR, "temperature_air_home-1#C001-000"
     )
-    target_id = _entity_id(hass, Platform.SENSOR, "target_temperature_home-1#C001-000")
-    preset_id = _entity_id(hass, Platform.SENSOR, "thermostat_mode_home-1#C001-000")
-    temperature_mode_id = _entity_id(
-        hass, Platform.SENSOR, "temperature_mode_home-1#C001-000"
+    timestamp_id = _entity_id(
+        hass, Platform.SENSOR, "last_communication_timestamp_home-1"
     )
-    heating_id = _entity_id(
-        hass, Platform.BINARY_SENSOR, "thermostat_is_heating_home-1#C001-000"
-    )
-    last_communication_id = _entity_id(
-        hass, Platform.SENSOR, "last_communication_home-1"
+    disabled_unique_ids = (
+        "target_temperature_home-1#C001-000",
+        "thermostat_mode_home-1#C001-000",
+        "temperature_mode_home-1#C001-000",
+        "thermostat_is_heating_home-1#C001-000",
     )
 
-    # Assert - Verify topology, states, units, and quiet logs.
+    # Assert - Verify topology, replacement entities, defaults, and quiet logs.
     assert setup_integration.state is ConfigEntryState.LOADED
     assert parent is not None
     assert child is not None
     assert child.via_device_id == parent.id
-    assert _state(hass, battery_id).state == "0"
-    assert _state(hass, battery_id).attributes[ATTR_UNIT_OF_MEASUREMENT] == "%"
+    assert child.model is None
+    assert _state(hass, battery_low_id).state == STATE_ON
     assert float(_state(hass, temperature_id).state) == pytest.approx(21.9444444444)
-    assert float(_state(hass, target_id).state) == pytest.approx(20.0)
-    assert _state(hass, preset_id).state == "Comfort"
-    assert _state(hass, temperature_mode_id).state == "Comfort"
-    assert _state(hass, heating_id).state == STATE_ON
-    assert _state(hass, last_communication_id).state == (
-        "0 days, 1 hours, 2 minutes and 3 seconds."
-    )
+    assert _state(hass, timestamp_id).state != STATE_UNAVAILABLE
+    for unique_id in disabled_unique_ids:
+        platform = (
+            Platform.BINARY_SENSOR
+            if unique_id.startswith("thermostat_is_heating")
+            else Platform.SENSOR
+        )
+        entity_id = _entity_id(hass, platform, unique_id)
+        entry = er.async_get(hass).async_get(entity_id)
+        assert entry is not None
+        assert entry.disabled_by is RegistryEntryDisabler.INTEGRATION
+        assert hass.states.get(entity_id) is None
     assert "non existing `via_device`" not in caplog.text
     assert "Battery is malfunctioning" not in caplog.text
 
@@ -130,12 +142,8 @@ async def test_successful_refresh_updates_all_entity_states_together(
     temperature_id = _entity_id(
         hass, Platform.SENSOR, "temperature_air_home-1#C001-000"
     )
-    preset_id = _entity_id(hass, Platform.SENSOR, "thermostat_mode_home-1#C001-000")
-    heating_id = _entity_id(
-        hass, Platform.BINARY_SENSOR, "thermostat_is_heating_home-1#C001-000"
-    )
-    last_communication_id = _entity_id(
-        hass, Platform.SENSOR, "last_communication_home-1"
+    battery_low_id = _entity_id(
+        hass, Platform.BINARY_SENSOR, "battery_low_home-1#C001-000"
     )
     refreshed_home_data = [dict(SMART_HOMES[0])]
     refreshed_home_data[0] = {
@@ -165,11 +173,147 @@ async def test_successful_refresh_updates_all_entity_states_together(
 
     # Assert - Verify every platform uses the new snapshot.
     assert float(_state(hass, temperature_id).state) == pytest.approx(21.1111111111)
-    assert _state(hass, preset_id).state == "Eco"
-    assert _state(hass, heating_id).state == STATE_OFF
-    assert _state(hass, last_communication_id).state == (
-        "1 days, 2 hours, 3 minutes and 4 seconds."
+    assert _state(hass, battery_low_id).state == STATE_ON
+
+
+async def test_retained_compatibility_entities_can_be_reenabled(
+    hass: HomeAssistant,
+    setup_integration: WattsVisionConfigEntry,
+) -> None:
+    """Test staged compatibility entities still expose their historical values."""
+    registry = er.async_get(hass)
+    entity_ids = {
+        unique_id: _entity_id(hass, platform, unique_id)
+        for platform, unique_id in (
+            (Platform.SENSOR, "target_temperature_home-1#C001-000"),
+            (Platform.SENSOR, "thermostat_mode_home-1#C001-000"),
+            (Platform.SENSOR, "temperature_mode_home-1#C001-000"),
+            (
+                Platform.BINARY_SENSOR,
+                "thermostat_is_heating_home-1#C001-000",
+            ),
+        )
+    }
+    for entity_id in entity_ids.values():
+        registry.async_update_entity(entity_id, disabled_by=None)
+
+    await hass.config_entries.async_reload(setup_integration.entry_id)
+    await hass.async_block_till_done()
+
+    assert float(
+        _state(hass, entity_ids["target_temperature_home-1#C001-000"]).state
+    ) == pytest.approx(20.0)
+    assert _state(hass, entity_ids["thermostat_mode_home-1#C001-000"]).state == (
+        "comfort"
     )
+    assert _state(hass, entity_ids["temperature_mode_home-1#C001-000"]).state == (
+        "comfort"
+    )
+    assert (
+        _state(hass, entity_ids["thermostat_is_heating_home-1#C001-000"]).state
+        == STATE_ON
+    )
+
+
+async def test_authoritative_refresh_adds_and_removes_thermostat_devices(
+    hass: HomeAssistant,
+    setup_integration: WattsVisionConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test complete snapshots drive dynamic entity and device lifecycle."""
+    # Arrange - Add a second thermostat to the authoritative account snapshot.
+    coordinator = setup_integration.runtime_data.coordinator
+    second_device = {
+        **SMART_HOMES[0]["zones"][0]["devices"][0],
+        "id": "home-1#C002-000",
+        "id_device": "api-device-2",
+        "error_code": "0",
+    }
+    expanded_homes = [
+        {
+            **SMART_HOMES[0],
+            "zones": [
+                {
+                    **SMART_HOMES[0]["zones"][0],
+                    "devices": [
+                        SMART_HOMES[0]["zones"][0]["devices"][0],
+                        second_device,
+                    ],
+                }
+            ],
+        }
+    ]
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(
+        expanded_homes
+    )
+
+    # Act - Refresh once to discover it, then once with a complete removal.
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    climate_id = _entity_id(hass, Platform.CLIMATE, "watts_thermostat_home-1#C002-000")
+    climate_entry = er.async_get(hass).async_get(climate_id)
+    assert climate_entry is not None
+    assert climate_entry.device_id is not None
+    child_device_id = climate_entry.device_id
+    assert _state(hass, climate_id).state == "heat"
+
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data()
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Assert - Keep the entity safely unavailable and dissociate the stale device.
+    assert _state(hass, climate_id).state == STATE_UNAVAILABLE
+    stale_device = dr.async_get(hass).async_get(child_device_id)
+    assert (
+        stale_device is None
+        or setup_integration.entry_id not in stale_device.config_entries
+    )
+
+
+async def test_authoritative_refresh_discovers_additional_home_topology(
+    hass: HomeAssistant,
+    setup_integration: WattsVisionConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test a newly returned home gains a hub and correctly parented entities."""
+    coordinator = setup_integration.runtime_data.coordinator
+    second_home = {
+        **SMART_HOMES[0],
+        "smarthome_id": "home-2",
+        "label": "Holiday home",
+        "mac_address": "00-11-22-33-44-66",
+        "zones": [
+            {
+                **SMART_HOMES[0]["zones"][0],
+                "devices": [
+                    {
+                        **SMART_HOMES[0]["zones"][0]["devices"][0],
+                        "id": "home-2#C001-000",
+                        "id_device": "api-home-2-device-1",
+                    }
+                ],
+            }
+        ],
+    }
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(
+        [SMART_HOMES[0], second_home]
+    )
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    climate_id = _entity_id(hass, Platform.CLIMATE, "watts_thermostat_home-2#C001-000")
+    climate_entry = er.async_get(hass).async_get(climate_id)
+    assert climate_entry is not None
+    assert climate_entry.device_id is not None
+    child = dr.async_get(hass).async_get(climate_entry.device_id)
+    parent = dr.async_get(hass).async_get(
+        setup_integration.runtime_data.parent_device_ids["home-2"]
+    )
+    assert child is not None
+    assert parent is not None
+    assert child.via_device_id == parent.id
+    assert (dr.CONNECTION_NETWORK_MAC, "00:11:22:33:44:66") in parent.connections
 
 
 @pytest.mark.parametrize(
@@ -281,6 +425,84 @@ async def test_options_reload_applies_scan_interval(
     assert setup_integration.runtime_data.coordinator.update_interval == timedelta(
         seconds=900
     )
+
+
+async def test_migrate_entry_moves_polling_option_and_sets_unique_id(
+    hass: HomeAssistant,
+) -> None:
+    """Test pre-1.2 entries migrate without replacing their entity identities."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Legacy",
+        data={
+            CONF_USERNAME: " User@Example.com ",
+            CONF_PASSWORD: "secret",
+            CONF_SCAN_INTERVAL: MIGRATED_SCAN_INTERVAL,
+        },
+        unique_id=None,
+        version=1,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+
+    assert await async_migrate_entry(hass, entry)
+    assert entry.minor_version == CONFIG_ENTRY_MINOR_VERSION
+    assert entry.unique_id == "user@example.com"
+    assert CONF_SCAN_INTERVAL not in entry.data
+    assert entry.options[CONF_SCAN_INTERVAL] == MIGRATED_SCAN_INTERVAL
+
+
+async def test_migrate_entry_removes_only_retired_registry_entities(
+    hass: HomeAssistant,
+) -> None:
+    """Test migration removes fabricated sensors but preserves replacements."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Existing",
+        data={CONF_USERNAME: "user@example.com", CONF_PASSWORD: "secret"},
+        options={CONF_SCAN_INTERVAL: 300},
+        unique_id="user@example.com",
+        version=1,
+        minor_version=2,
+    )
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    retired_entities = (
+        (Platform.SENSOR, "battery_home-1#C001-000"),
+        (Platform.SENSOR, "last_communication_home-1"),
+    )
+    replacement_entities = (
+        (Platform.BINARY_SENSOR, "battery_low_home-1#C001-000"),
+        (Platform.SENSOR, "last_communication_timestamp_home-1"),
+    )
+    for platform, unique_id in (*retired_entities, *replacement_entities):
+        registry.async_get_or_create(
+            platform,
+            DOMAIN,
+            unique_id,
+            config_entry=entry,
+        )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.minor_version == CONFIG_ENTRY_MINOR_VERSION
+    for platform, unique_id in retired_entities:
+        assert registry.async_get_entity_id(platform, DOMAIN, unique_id) is None
+    for platform, unique_id in replacement_entities:
+        assert registry.async_get_entity_id(platform, DOMAIN, unique_id) is not None
+
+
+async def test_migrate_entry_is_idempotent_for_current_entries(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+) -> None:
+    """Test current entries pass through migration unchanged."""
+    original_data = dict(config_entry.data)
+    original_options = dict(config_entry.options)
+
+    assert await async_migrate_entry(hass, config_entry)
+    assert config_entry.data == original_data
+    assert config_entry.options == original_options
 
 
 async def test_unload_removes_entities_and_coordinator_contexts(
