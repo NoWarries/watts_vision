@@ -2,88 +2,121 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.const import EntityCategory
+from homeassistant.core import callback
 
-from .const import DOMAIN
+from .entity import WattsVisionEntity, WattsVisionEntityContext
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
     from . import WattsVisionConfigEntry
-    from .watts_api import JsonObject, WattsApi
+    from .coordinator import WattsVisionDataUpdateCoordinator
 
-SCAN_INTERVAL = timedelta(seconds=120)
+
+PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(
     _hass: HomeAssistant,
     config_entry: WattsVisionConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up Watts Vision binary sensors."""
-    client = config_entry.runtime_data
-    sensors: list[BinarySensorEntity] = []
-    for smart_home in client.get_smart_homes():
-        smart_home_id = str(smart_home["smarthome_id"])
-        for zone in smart_home.get("zones") or []:
-            zone_label = str(zone["zone_label"])
-            sensors.extend(
-                WattsVisionHeatingBinarySensor(
-                    client,
-                    smart_home_id,
-                    str(device["id"]),
-                    zone_label,
+    runtime_data = config_entry.runtime_data
+    coordinator = runtime_data.coordinator
+    known_devices: set[tuple[str, str]] = set()
+
+    @callback
+    def async_add_new_entities() -> None:
+        """Add binary sensors discovered in a later snapshot."""
+        current_devices: dict[tuple[str, str], WattsVisionEntityContext] = {}
+        for smart_home in coordinator.data.smart_homes:
+            smart_home_id = smart_home.smart_home_id
+            for zone in smart_home.zones:
+                for device in zone.devices:
+                    current_devices[(smart_home_id, device.device_id)] = (
+                        WattsVisionEntityContext(
+                            smart_home_id=smart_home_id,
+                            device_id=device.device_id,
+                            zone=zone.label,
+                            parent_device_id=runtime_data.parent_device_ids[
+                                smart_home_id
+                            ],
+                        )
+                    )
+        new_devices = current_devices.keys() - known_devices
+        if new_devices:
+            async_add_entities(
+                entity
+                for key in new_devices
+                for entity in (
+                    WattsVisionHeatingBinarySensor(
+                        coordinator,
+                        current_devices[key],
+                    ),
+                    WattsVisionBatteryLowBinarySensor(
+                        coordinator,
+                        current_devices[key],
+                    ),
                 )
-                for device in zone.get("devices") or []
             )
+            known_devices.update(new_devices)
 
-    async_add_entities(sensors, update_before_add=True)
+    async_add_new_entities()
+    config_entry.async_on_unload(coordinator.async_add_listener(async_add_new_entities))
 
 
-class WattsVisionHeatingBinarySensor(BinarySensorEntity):
+class WattsVisionHeatingBinarySensor(WattsVisionEntity, BinarySensorEntity):
     """Represent whether a Watts Vision thermostat is actively heating."""
 
     _attr_device_class = BinarySensorDeviceClass.HEAT
-    _attr_has_entity_name = True
+    _attr_entity_registry_enabled_default = False
     _attr_translation_key = "heating"
 
     def __init__(
         self,
-        client: WattsApi,
-        smart_home_id: str,
-        device_id: str,
-        zone: str,
+        coordinator: WattsVisionDataUpdateCoordinator,
+        context: WattsVisionEntityContext,
     ) -> None:
         """Initialize a heating binary sensor."""
-        self._client = client
-        self._smart_home_id = smart_home_id
-        self._device_id = device_id
-        self._attr_unique_id = f"thermostat_is_heating_{device_id}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_id)},
-            manufacturer="Watts",
-            name=f"Thermostat {zone}",
-            model="BT-D03-RF",
-            via_device=(DOMAIN, smart_home_id),
-            suggested_area=zone,
-        )
+        super().__init__(coordinator, context)
+        self._attr_unique_id = f"thermostat_is_heating_{context.device_id}"
 
-    def _device(self) -> JsonObject | None:
-        """Return the cached device."""
-        return self._client.get_device(self._smart_home_id, self._device_id)
-
-    async def async_update(self) -> None:
-        """Update the heating state from cached data."""
+    @property
+    @override
+    def is_on(self) -> bool | None:
+        """Return whether the thermostat is actively heating."""
         device = self._device()
-        self._attr_available = device is not None
-        self._attr_is_on = (
-            str(device["heating_up"]) != "0" if device is not None else None
-        )
+        return device.is_heating if device is not None else None
+
+
+class WattsVisionBatteryLowBinarySensor(WattsVisionEntity, BinarySensorEntity):
+    """Represent the thermostat's actual low-battery flag."""
+
+    _attr_device_class = BinarySensorDeviceClass.BATTERY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "battery_low"
+
+    def __init__(
+        self,
+        coordinator: WattsVisionDataUpdateCoordinator,
+        context: WattsVisionEntityContext,
+    ) -> None:
+        """Initialize a low-battery binary sensor."""
+        super().__init__(coordinator, context)
+        self._attr_unique_id = f"battery_low_{context.device_id}"
+
+    @property
+    @override
+    def is_on(self) -> bool | None:
+        """Return whether the thermostat reports a low battery."""
+        device = self._device()
+        return device.battery_low if device is not None else None

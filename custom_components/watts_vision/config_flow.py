@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .api import WattsVisionAuthenticationError, WattsVisionClient, WattsVisionError
 from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
 )
-from .watts_api import WattsApi, WattsApiError, WattsAuthenticationError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -46,7 +46,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the Watts Vision config flow."""
 
     VERSION = 1
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     def __init__(self) -> None:
         """Initialize a config flow."""
@@ -54,11 +54,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _async_validate_credentials(self, username: str, password: str) -> None:
         """Validate account credentials or raise a typed API error."""
-        api = WattsApi(username, password)
-        await self.hass.async_add_executor_job(
-            partial(api.get_login_token, force_login=True)
+        api = WattsVisionClient(
+            username,
+            password,
+            session=async_get_clientsession(self.hass),
         )
+        await api.async_validate_credentials()
 
+    @override
     async def async_step_user(
         self,
         user_input: dict[str, Any] | None = None,
@@ -73,9 +76,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 try:
                     await self._async_validate_credentials(username, password)
-                except WattsAuthenticationError:
+                except WattsVisionAuthenticationError:
                     errors["base"] = "invalid_credentials"
-                except WattsApiError:
+                except WattsVisionError:
                     errors["base"] = "cannot_connect"
                 else:
                     await self.async_set_unique_id(username.casefold())
@@ -115,9 +118,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 try:
                     await self._async_validate_credentials(username, password)
-                except WattsAuthenticationError:
+                except WattsVisionAuthenticationError:
                     errors["base"] = "invalid_credentials"
-                except WattsApiError:
+                except WattsVisionError:
                     errors["base"] = "cannot_connect"
                 else:
                     return self.async_update_reload_and_abort(
@@ -154,6 +157,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(
         _config_entry: config_entries.ConfigEntry,
     ) -> OptionsFlowHandler:

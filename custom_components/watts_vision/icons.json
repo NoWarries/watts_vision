@@ -1,0 +1,12 @@
+{
+  "entity": {
+    "sensor": {
+      "preset_mode": {
+        "default": "mdi:thermostat-cog"
+      },
+      "temperature_mode": {
+        "default": "mdi:thermometer-lines"
+      }
+    }
+  }
+}

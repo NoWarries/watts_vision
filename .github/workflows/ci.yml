@@ -48,3 +48,19 @@ jobs:
 
       - name: "✅ Run Hassfest validation"
         uses: home-assistant/actions/hassfest@master
+
+  pytest:
+    name: "🧪 Home Assistant tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "⌛ Check out repository"
+        uses: actions/checkout@v6.0.2
+
+      - name: "🐍 Install uv and Python"
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.14.2"
+
+      - name: "🧪 Run focused integration tests"
+        run: uv run --locked --group test pytest

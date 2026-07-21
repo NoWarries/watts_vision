@@ -52,8 +52,37 @@
       }
     }
   },
+  "exceptions": {
+    "authentication_failed": {
+      "message": "Authenticatie met Watts Vision is mislukt"
+    },
+    "device_unavailable": {
+      "message": "Watts Vision-apparaat {device_id} is niet beschikbaar"
+    },
+    "hvac_mode_unsupported": {
+      "message": "HVAC-modus {mode} wordt niet ondersteund door deze thermostaat"
+    },
+    "temperature_limits_unavailable": {
+      "message": "De temperatuurlimieten van de thermostaat zijn niet beschikbaar"
+    },
+    "temperature_mode_unsupported": {
+      "message": "De temperatuur kan niet worden ingesteld in de modus {mode}"
+    },
+    "thermostat_update_failed": {
+      "message": "De Watts Vision-thermostaat kan niet worden bijgewerkt"
+    },
+    "thermostat_update_rejected": {
+      "message": "Watts Vision heeft de thermostaatwijziging geweigerd"
+    },
+    "update_failed": {
+      "message": "Watts Vision-gegevens kunnen niet worden bijgewerkt"
+    }
+  },
   "entity": {
     "binary_sensor": {
+      "battery_low": {
+        "name": "Batterij"
+      },
       "heating": {
         "name": "Verwarming"
       }
@@ -62,20 +91,39 @@
       "air_temperature": {
         "name": "Luchttemperatuur"
       },
-      "battery": {
-        "name": "Batterij"
-      },
       "last_communication": {
         "name": "Laatste communicatie"
       },
       "preset_mode": {
-        "name": "Voorinstelling"
+        "name": "Voorinstelling",
+        "state": {
+          "boost": "Boost",
+          "comfort": "Comfort",
+          "eco": "Eco",
+          "fan": "Ventilator",
+          "fan_disabled": "Ventilator uitgeschakeld",
+          "frost": "Vorstbeveiliging",
+          "manual": "Handmatig",
+          "off": "Uit",
+          "program": "Programma",
+          "unknown": "Onbekend"
+        }
       },
       "target_temperature": {
         "name": "Doeltemperatuur"
       },
       "temperature_mode": {
-        "name": "Temperatuurmodus"
+        "name": "Temperatuurmodus",
+        "state": {
+          "boost": "Boost",
+          "comfort": "Comfort",
+          "current": "Huidig",
+          "eco": "Eco",
+          "frost": "Vorstbeveiliging",
+          "manual": "Handmatig",
+          "none": "Geen",
+          "target": "Doel"
+        }
       }
     }
   }

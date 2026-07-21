@@ -2,298 +2,234 @@
 
 from __future__ import annotations
 
-import logging
-from datetime import timedelta
-from typing import TYPE_CHECKING, Any, ClassVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, override
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import UnitOfRatio, UnitOfTemperature
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
-
-from .const import (
-    AVAILABLE_HEAT_MODES,
-    AVAILABLE_TEMP_TYPES,
-    DEVICE_TO_MODE_TYPE,
-    DOMAIN,
-    TEMP_TYPE_TO_DEVICE,
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
 )
+from homeassistant.const import EntityCategory, UnitOfTemperature
+from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
+
+from .const import DEVICE_TO_MODE_TYPE, DOMAIN, REPORTED_HEAT_MODES, REPORTED_TEMP_TYPES
+from .coordinator import WattsVisionDataUpdateCoordinator
+from .entity import WattsVisionEntity, WattsVisionEntityContext
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from datetime import datetime
+
     from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+    from homeassistant.helpers.typing import StateType
 
     from . import WattsVisionConfigEntry
-    from .watts_api import JsonObject, WattsApi
+    from .api import WattsVisionDevice
 
-_LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(seconds=120)
+
+PARALLEL_UPDATES = 1
+
+
+@dataclass(frozen=True, kw_only=True)
+class WattsVisionSensorEntityDescription(SensorEntityDescription):
+    """Describe a Watts Vision thermostat sensor."""
+
+    unique_id_prefix: str
+    value_fn: Callable[[WattsVisionDevice], StateType]
+
+
+THERMOSTAT_SENSORS: tuple[WattsVisionSensorEntityDescription, ...] = (
+    WattsVisionSensorEntityDescription(
+        key="preset_mode",
+        translation_key="preset_mode",
+        device_class=SensorDeviceClass.ENUM,
+        entity_registry_enabled_default=False,
+        options=[mode.name.lower() for mode in REPORTED_HEAT_MODES],
+        unique_id_prefix="thermostat_mode",
+        value_fn=lambda device: DEVICE_TO_MODE_TYPE[device.mode].heat_mode.name.lower(),
+    ),
+    WattsVisionSensorEntityDescription(
+        key="temperature_mode",
+        translation_key="temperature_mode",
+        device_class=SensorDeviceClass.ENUM,
+        entity_registry_enabled_default=False,
+        options=[mode.name.lower() for mode in REPORTED_TEMP_TYPES],
+        unique_id_prefix="temperature_mode",
+        value_fn=lambda device: DEVICE_TO_MODE_TYPE[device.mode].temp_type.name.lower(),
+    ),
+    WattsVisionSensorEntityDescription(
+        key="air_temperature",
+        translation_key="air_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        state_class=SensorStateClass.MEASUREMENT,
+        unique_id_prefix="temperature_air",
+        value_fn=lambda device: device.air_temperature,
+    ),
+    WattsVisionSensorEntityDescription(
+        key="target_temperature",
+        translation_key="target_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        entity_registry_enabled_default=False,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        unique_id_prefix="target_temperature",
+        value_fn=lambda device: device.target_temperature,
+    ),
+)
 
 
 async def async_setup_entry(
     _hass: HomeAssistant,
     config_entry: WattsVisionConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up Watts Vision sensors."""
-    client = config_entry.runtime_data
-    sensors: list[SensorEntity] = []
+    runtime_data = config_entry.runtime_data
+    coordinator = runtime_data.coordinator
+    known_devices: set[tuple[str, str]] = set()
+    known_homes: set[str] = set()
 
-    for smart_home in client.get_smart_homes():
-        smart_home_id = str(smart_home["smarthome_id"])
-        for zone in smart_home.get("zones") or []:
-            zone_label = str(zone["zone_label"])
-            for device in zone.get("devices") or []:
-                device_id = str(device["id"])
-                sensors.extend(
-                    (
-                        WattsVisionPresetModeSensor(
-                            client, smart_home_id, device_id, zone_label
-                        ),
-                        WattsVisionTemperatureModeSensor(
-                            client, smart_home_id, device_id, zone_label
-                        ),
-                        WattsVisionTemperatureSensor(
-                            client, smart_home_id, device_id, zone_label
-                        ),
-                        WattsVisionSetTemperatureSensor(
-                            client, smart_home_id, device_id, zone_label
-                        ),
-                        WattsVisionBatterySensor(
-                            client, smart_home_id, device_id, zone_label
-                        ),
+    @callback
+    def async_add_new_entities() -> None:
+        """Add sensor entities discovered in a later snapshot."""
+        current_devices: dict[tuple[str, str], WattsVisionEntityContext] = {}
+        current_homes = {
+            smart_home.smart_home_id: smart_home
+            for smart_home in coordinator.data.smart_homes
+        }
+        for smart_home in coordinator.data.smart_homes:
+            smart_home_id = smart_home.smart_home_id
+            for zone in smart_home.zones:
+                for device in zone.devices:
+                    current_devices[(smart_home_id, device.device_id)] = (
+                        WattsVisionEntityContext(
+                            smart_home_id=smart_home_id,
+                            device_id=device.device_id,
+                            zone=zone.label,
+                            parent_device_id=runtime_data.parent_device_ids[
+                                smart_home_id
+                            ],
+                        )
                     )
+
+        new_devices = current_devices.keys() - known_devices
+        new_homes = current_homes.keys() - known_homes
+        entities: list[SensorEntity] = [
+            WattsVisionDeviceSensor(coordinator, current_devices[key], description)
+            for key in new_devices
+            for description in THERMOSTAT_SENSORS
+        ]
+        for smart_home_id in new_homes:
+            smart_home = current_homes[smart_home_id]
+            entities.extend(
+                (
+                    WattsVisionLastCommunicationTimestampSensor(
+                        coordinator,
+                        smart_home_id,
+                        smart_home.label,
+                        smart_home.mac_address,
+                    ),
                 )
-
-        sensors.append(
-            WattsVisionLastCommunicationSensor(
-                client,
-                smart_home_id,
-                str(smart_home["label"]),
-                str(smart_home["mac_address"]),
             )
-        )
+        if entities:
+            async_add_entities(entities)
+            known_devices.update(new_devices)
+            known_homes.update(new_homes)
 
-    async_add_entities(sensors, update_before_add=True)
+    async_add_new_entities()
+    config_entry.async_on_unload(coordinator.async_add_listener(async_add_new_entities))
 
 
-class WattsVisionDeviceSensor(SensorEntity):
-    """Base class for Watts Vision thermostat sensors."""
+class WattsVisionDeviceSensor(WattsVisionEntity, SensorEntity):
+    """Represent a declaratively described thermostat sensor."""
 
-    _attr_has_entity_name = True
+    entity_description: WattsVisionSensorEntityDescription
 
     def __init__(
         self,
-        client: WattsApi,
-        smart_home_id: str,
-        device_id: str,
-        zone: str,
+        coordinator: WattsVisionDataUpdateCoordinator,
+        context: WattsVisionEntityContext,
+        entity_description: WattsVisionSensorEntityDescription,
     ) -> None:
         """Initialize a thermostat sensor."""
-        self._client = client
-        self._smart_home_id = smart_home_id
-        self._device_id = device_id
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_id)},
-            manufacturer="Watts",
-            name=f"Thermostat {zone}",
-            model="BT-D03-RF",
-            via_device=(DOMAIN, smart_home_id),
-            suggested_area=zone,
+        super().__init__(coordinator, context)
+        self.entity_description = entity_description
+        self._attr_unique_id = (
+            f"{entity_description.unique_id_prefix}_{context.device_id}"
         )
 
-    def _device(self) -> JsonObject | None:
-        """Return the cached device."""
-        return self._client.get_device(self._smart_home_id, self._device_id)
-
-
-class WattsVisionPresetModeSensor(WattsVisionDeviceSensor):
-    """Represent the active Watts Vision preset mode."""
-
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = [
-        mode.value.capitalize() for mode in AVAILABLE_HEAT_MODES
-    ]
-    _attr_translation_key = "preset_mode"
-
-    def __init__(
-        self,
-        client: WattsApi,
-        smart_home_id: str,
-        device_id: str,
-        zone: str,
-    ) -> None:
-        """Initialize a preset mode sensor."""
-        super().__init__(client, smart_home_id, device_id, zone)
-        self._attr_unique_id = f"thermostat_mode_{device_id}"
-
-    async def async_update(self) -> None:
-        """Update the active preset mode from cached data."""
+    @property
+    @override
+    def native_value(self) -> StateType:
+        """Return the sensor value from the latest snapshot."""
         device = self._device()
-        self._attr_available = device is not None
-        self._attr_native_value = (
-            DEVICE_TO_MODE_TYPE[str(device["gv_mode"])].heat_mode.value.capitalize()
-            if device is not None
-            else None
-        )
+        return self.entity_description.value_fn(device) if device is not None else None
 
 
-class WattsVisionTemperatureModeSensor(WattsVisionDeviceSensor):
-    """Represent the active Watts Vision temperature mode."""
+class WattsVisionHubSensor(
+    CoordinatorEntity[WattsVisionDataUpdateCoordinator], SensorEntity
+):
+    """Base class for a sensor attached to a Watts Vision central unit."""
 
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = [
-        mode.value.capitalize() for mode in AVAILABLE_TEMP_TYPES
-    ]
-    _attr_translation_key = "temperature_mode"
-
-    def __init__(
-        self,
-        client: WattsApi,
-        smart_home_id: str,
-        device_id: str,
-        zone: str,
-    ) -> None:
-        """Initialize a temperature mode sensor."""
-        super().__init__(client, smart_home_id, device_id, zone)
-        self._attr_unique_id = f"temperature_mode_{device_id}"
-
-    async def async_update(self) -> None:
-        """Update the temperature mode from cached data."""
-        device = self._device()
-        self._attr_available = device is not None
-        self._attr_native_value = (
-            DEVICE_TO_MODE_TYPE[str(device["gv_mode"])].temp_type.value.capitalize()
-            if device is not None
-            else None
-        )
-
-
-class WattsVisionBatterySensor(WattsVisionDeviceSensor):
-    """Represent the Watts Vision device battery state."""
-
-    _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE
-    _attr_translation_key = "battery"
-
-    def __init__(
-        self,
-        client: WattsApi,
-        smart_home_id: str,
-        device_id: str,
-        zone: str,
-    ) -> None:
-        """Initialize a battery sensor."""
-        super().__init__(client, smart_home_id, device_id, zone)
-        self._attr_unique_id = f"battery_{device_id}"
-
-    async def async_update(self) -> None:
-        """Update the battery state from cached data."""
-        device = self._device()
-        self._attr_available = device is not None
-        if device is None:
-            self._attr_native_value = None
-            return
-        if str(device.get("error_code")) == "1":
-            _LOGGER.warning(
-                "Battery is malfunctioning or almost empty for device %s",
-                self._device_id,
-            )
-            self._attr_native_value = 0
-        else:
-            self._attr_native_value = 100
-
-
-class WattsVisionTemperatureSensor(WattsVisionDeviceSensor):
-    """Represent the current air temperature."""
-
-    _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
-    _attr_translation_key = "air_temperature"
-
-    def __init__(
-        self,
-        client: WattsApi,
-        smart_home_id: str,
-        device_id: str,
-        zone: str,
-    ) -> None:
-        """Initialize an air-temperature sensor."""
-        super().__init__(client, smart_home_id, device_id, zone)
-        self._attr_unique_id = f"temperature_air_{device_id}"
-
-    async def async_update(self) -> None:
-        """Update the air temperature from cached data."""
-        device = self._device()
-        self._attr_available = device is not None
-        self._attr_native_value = (
-            float(device["temperature_air"]) / 10 if device is not None else None
-        )
-
-
-class WattsVisionSetTemperatureSensor(WattsVisionDeviceSensor):
-    """Represent the active target temperature."""
-
-    _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
-    _attr_translation_key = "target_temperature"
-
-    def __init__(
-        self,
-        client: WattsApi,
-        smart_home_id: str,
-        device_id: str,
-        zone: str,
-    ) -> None:
-        """Initialize a target-temperature sensor."""
-        super().__init__(client, smart_home_id, device_id, zone)
-        self._attr_unique_id = f"target_temperature_{device_id}"
-
-    async def async_update(self) -> None:
-        """Update the target temperature from cached data."""
-        device = self._device()
-        self._attr_available = device is not None
-        if device is None or str(device["gv_mode"]) == "1":
-            self._attr_native_value = None
-            return
-        temperature_key = TEMP_TYPE_TO_DEVICE[
-            DEVICE_TO_MODE_TYPE[str(device["gv_mode"])].temp_type
-        ]
-        self._attr_native_value = float(device[temperature_key]) / 10
-
-
-class WattsVisionLastCommunicationSensor(SensorEntity):
-    """Represent the last communication with a Watts Vision central unit."""
-
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_has_entity_name = True
-    _attr_translation_key = "last_communication"
 
     def __init__(
         self,
-        client: WattsApi,
+        coordinator: WattsVisionDataUpdateCoordinator,
         smart_home_id: str,
         label: str,
         mac_address: str,
     ) -> None:
-        """Initialize a last-communication sensor."""
-        self._client = client
+        """Initialize a central-unit sensor."""
+        super().__init__(coordinator)
         self._smart_home_id = smart_home_id
-        self._attr_unique_id = f"last_communication_{smart_home_id}"
-        self._attr_device_info = DeviceInfo(
+        self._attr_device_info = dr.DeviceInfo(
             identifiers={(DOMAIN, smart_home_id)},
             manufacturer="Watts",
             name=f"Central Unit {label}",
             model="BT-CT02-RF",
-            connections={(CONNECTION_NETWORK_MAC, mac_address)},
+            connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(mac_address))},
         )
 
-    async def async_update(self) -> None:
-        """Fetch and update the last communication value."""
-        data: dict[str, Any] = await self.hass.async_add_executor_job(
-            self._client.get_last_communication,
-            self._smart_home_id,
+    @property
+    @override
+    def available(self) -> bool:
+        """Return whether the coordinator and central unit are available."""
+        return (
+            super().available
+            and self.coordinator.data.get_smart_home(self._smart_home_id) is not None
         )
-        difference = data["diffObj"]
-        self._attr_native_value = (
-            f"{difference['days']} days, {difference['hours']} hours, "
-            f"{difference['minutes']} minutes and {difference['seconds']} seconds."
-        )
+
+
+class WattsVisionLastCommunicationTimestampSensor(WattsVisionHubSensor):
+    """Represent the timestamp of the central unit's last communication."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_translation_key = "last_communication"
+
+    def __init__(
+        self,
+        coordinator: WattsVisionDataUpdateCoordinator,
+        smart_home_id: str,
+        label: str,
+        mac_address: str,
+    ) -> None:
+        """Initialize a last-communication timestamp sensor."""
+        super().__init__(coordinator, smart_home_id, label, mac_address)
+        self._attr_unique_id = f"last_communication_timestamp_{smart_home_id}"
+
+    @property
+    @override
+    def native_value(self) -> datetime | None:
+        """Return the estimated time of the last communication."""
+        smart_home = self.coordinator.data.get_smart_home(self._smart_home_id)
+        if smart_home is None:
+            return None
+        return dt_util.utcnow() - smart_home.last_communication.as_timedelta()

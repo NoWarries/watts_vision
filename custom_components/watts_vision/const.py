@@ -13,6 +13,8 @@ from homeassistant.components.climate.const import (
     PRESET_NONE,
 )
 
+from .api import WattsVisionDevice, WattsVisionDeviceMode
+
 DOMAIN = "watts_vision"
 
 LOGGER = logging.getLogger(__package__)
@@ -35,6 +37,10 @@ class HeatMode(Enum):
     PROGRAM = PRESET_PROGRAM
     ECO = PRESET_ECO
     BOOST = PRESET_BOOST
+    FAN = "Fan"
+    FAN_DISABLED = "Fan Disabled"
+    MANUAL = "Manual"
+    UNKNOWN = "Unknown"
 
 
 class TempType(Enum):
@@ -57,32 +63,44 @@ class ModeInfo(NamedTuple):
     temp_type: TempType
 
 
-DEVICE_TO_MODE_TYPE: dict[str, ModeInfo] = {
-    "0": ModeInfo(HeatMode.COMFORT, TempType.COMFORT),
-    "1": ModeInfo(HeatMode.OFF, TempType.NONE),
-    "2": ModeInfo(HeatMode.FROST, TempType.FROST),
-    "3": ModeInfo(HeatMode.ECO, TempType.ECO),
-    "4": ModeInfo(HeatMode.BOOST, TempType.BOOST),
-    "8": ModeInfo(HeatMode.PROGRAM, TempType.COMFORT),
-    "11": ModeInfo(HeatMode.PROGRAM, TempType.ECO),
+DEVICE_TO_MODE_TYPE: dict[WattsVisionDeviceMode, ModeInfo] = {
+    WattsVisionDeviceMode.COMFORT: ModeInfo(HeatMode.COMFORT, TempType.COMFORT),
+    WattsVisionDeviceMode.OFF: ModeInfo(HeatMode.OFF, TempType.NONE),
+    WattsVisionDeviceMode.FROST: ModeInfo(HeatMode.FROST, TempType.FROST),
+    WattsVisionDeviceMode.ECO: ModeInfo(HeatMode.ECO, TempType.ECO),
+    WattsVisionDeviceMode.BOOST: ModeInfo(HeatMode.BOOST, TempType.BOOST),
+    WattsVisionDeviceMode.FAN: ModeInfo(HeatMode.FAN, TempType.NONE),
+    WattsVisionDeviceMode.FAN_DISABLED: ModeInfo(
+        HeatMode.FAN_DISABLED,
+        TempType.NONE,
+    ),
+    WattsVisionDeviceMode.PROGRAM_COMFORT: ModeInfo(HeatMode.PROGRAM, TempType.COMFORT),
+    WattsVisionDeviceMode.PROGRAM_ECO: ModeInfo(HeatMode.PROGRAM, TempType.ECO),
+    WattsVisionDeviceMode.PROGRAM_UNSPECIFIED: ModeInfo(
+        HeatMode.PROGRAM,
+        TempType.NONE,
+    ),
+    WattsVisionDeviceMode.MANUAL: ModeInfo(HeatMode.MANUAL, TempType.MANUAL),
+    WattsVisionDeviceMode.PROGRAM_BOOST: ModeInfo(
+        HeatMode.PROGRAM,
+        TempType.BOOST,
+    ),
+    WattsVisionDeviceMode.UNKNOWN: ModeInfo(HeatMode.UNKNOWN, TempType.NONE),
 }
 
-# - 5: fan
-# - 6: fan disabled
-# - 13: program with no known temperature type
-# - 15: manual temperature
-# - 16: program using the boost temperature
-
-HEAT_MODE_TO_DEVICE: dict[HeatMode, str] = {
-    HeatMode.ECO: "3",
-    HeatMode.FROST: "2",
-    HeatMode.COMFORT: "0",
-    HeatMode.PROGRAM: "11",
-    HeatMode.BOOST: "4",
-    HeatMode.OFF: "1",
+HEAT_MODE_TO_DEVICE: dict[HeatMode, WattsVisionDeviceMode] = {
+    HeatMode.ECO: WattsVisionDeviceMode.ECO,
+    HeatMode.FROST: WattsVisionDeviceMode.FROST,
+    HeatMode.COMFORT: WattsVisionDeviceMode.COMFORT,
+    HeatMode.PROGRAM: WattsVisionDeviceMode.PROGRAM_ECO,
+    HeatMode.BOOST: WattsVisionDeviceMode.BOOST,
+    HeatMode.OFF: WattsVisionDeviceMode.OFF,
+    HeatMode.FAN: WattsVisionDeviceMode.FAN,
+    HeatMode.FAN_DISABLED: WattsVisionDeviceMode.FAN_DISABLED,
+    HeatMode.MANUAL: WattsVisionDeviceMode.MANUAL,
 }
 
-TEMP_TYPE_TO_DEVICE: dict[TempType, str] = {
+TEMP_TYPE_TO_STATE_ATTRIBUTE: dict[TempType, str] = {
     TempType.ECO: "consigne_eco",
     TempType.FROST: "consigne_hg",
     TempType.COMFORT: "consigne_confort",
@@ -90,6 +108,28 @@ TEMP_TYPE_TO_DEVICE: dict[TempType, str] = {
     TempType.MANUAL: "consigne_manuel",
     TempType.BOOST: "consigne_boost",
 }
+
+
+def temperature_for_type(
+    device: WattsVisionDevice,
+    temperature_type: TempType,
+) -> float:
+    """Return a thermostat temperature for an integration temperature type."""
+    if temperature_type is TempType.ECO:
+        return device.eco_temperature
+    if temperature_type is TempType.FROST:
+        return device.frost_temperature
+    if temperature_type is TempType.COMFORT:
+        return device.comfort_temperature
+    if temperature_type is TempType.CURRENT:
+        return device.air_temperature
+    if temperature_type is TempType.MANUAL:
+        return device.manual_temperature
+    if temperature_type is TempType.BOOST:
+        return device.boost_temperature
+    msg = f"Temperature type {temperature_type.value} has no device value"
+    raise ValueError(msg)
+
 
 AVAILABLE_TEMP_TYPES: tuple[TempType, ...] = (
     TempType.ECO,
@@ -106,4 +146,18 @@ AVAILABLE_HEAT_MODES: tuple[HeatMode, ...] = (
     HeatMode.PROGRAM,
     HeatMode.BOOST,
     HeatMode.OFF,
+    HeatMode.FAN,
+    HeatMode.FAN_DISABLED,
+    HeatMode.MANUAL,
+)
+
+REPORTED_HEAT_MODES: tuple[HeatMode, ...] = (
+    *AVAILABLE_HEAT_MODES,
+    HeatMode.UNKNOWN,
+)
+
+REPORTED_TEMP_TYPES: tuple[TempType, ...] = (
+    *AVAILABLE_TEMP_TYPES,
+    TempType.NONE,
+    TempType.MANUAL,
 )
