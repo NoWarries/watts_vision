@@ -1,6 +1,6 @@
 [project]
 name = "watts-vision-dev"
-version = "0.7.0"
+version = "0.8.0"
 requires-python = ">=3.14.2,<3.15"
 dependencies = []
 
@@ -8,6 +8,11 @@ dependencies = []
 lint = [
     "pre-commit==4.6.0",
     "ruff==0.15.22",
+]
+test = [
+    "pytest>=9.0.0,<10",
+    "pytest-cov>=7.0.0,<8",
+    "pytest-homeassistant-custom-component>=0.13.338",
 ]
 
 [tool.uv]
@@ -38,5 +43,16 @@ max-complexity = 25
 [tool.ruff.lint.pyupgrade]
 keep-runtime-typing = true
 
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
 [tool.ruff.format]
 docstring-code-format = true
+
+[tool.pytest.ini_options]
+addopts = "--cov=custom_components.watts_vision --cov-report=term-missing"
+asyncio_mode = "auto"
+filterwarnings = [
+    "error::DeprecationWarning:custom_components\\.watts_vision.*",
+    "error::PendingDeprecationWarning:custom_components\\.watts_vision.*",
+]

@@ -13,18 +13,18 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.const import UnitOfTemperature
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
     AVAILABLE_HEAT_MODES,
     AVAILABLE_TEMP_TYPES,
     DEVICE_TO_MODE_TYPE,
-    DOMAIN,
     HEAT_MODE_TO_DEVICE,
     TEMP_TYPE_TO_DEVICE,
     HeatMode,
 )
+from .entity import WattsVisionEntity
 from .watts_api import WattsApiError
 
 if TYPE_CHECKING:
@@ -32,9 +32,11 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import WattsVisionConfigEntry
-    from .watts_api import JsonObject, WattsApi
+    from .coordinator import WattsVisionDataUpdateCoordinator
+    from .watts_api import JsonObject
 
 _LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(
@@ -43,15 +45,15 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Watts Vision climate entities."""
-    client = config_entry.runtime_data
+    coordinator = config_entry.runtime_data
     entities: list[ClimateEntity] = []
-    for smart_home in client.get_smart_homes():
+    for smart_home in coordinator.data.smart_homes:
         smart_home_id = str(smart_home["smarthome_id"])
         for zone in smart_home.get("zones") or []:
             zone_label = str(zone["zone_label"])
             entities.extend(
                 WattsThermostat(
-                    client,
+                    coordinator,
                     smart_home_id,
                     str(device["id"]),
                     str(device["id_device"]),
@@ -60,13 +62,12 @@ async def async_setup_entry(
                 for device in zone.get("devices") or []
             )
 
-    async_add_entities(entities, update_before_add=True)
+    async_add_entities(entities)
 
 
-class WattsThermostat(ClimateEntity):
+class WattsThermostat(WattsVisionEntity, ClimateEntity):
     """Represent a Watts Vision thermostat."""
 
-    _attr_has_entity_name = True
     _attr_hvac_modes: ClassVar[list[HVACMode]] = [
         HVACMode.HEAT,
         HVACMode.COOL,
@@ -82,33 +83,23 @@ class WattsThermostat(ClimateEntity):
 
     def __init__(
         self,
-        client: WattsApi,
+        coordinator: WattsVisionDataUpdateCoordinator,
         smart_home_id: str,
         device_id: str,
         api_device_id: str,
         zone: str,
     ) -> None:
         """Initialize a thermostat entity."""
-        self._client = client
-        self._smart_home_id = smart_home_id
-        self._device_id = device_id
+        super().__init__(coordinator, smart_home_id, device_id, zone)
         self._api_device_id = api_device_id
         self._attr_unique_id = f"watts_thermostat_{device_id}"
         self._attr_name = None
         self._attr_extra_state_attributes = {"previous_gv_mode": "0"}
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_id)},
-            manufacturer="Watts",
-            name=f"Thermostat {zone}",
-            model="BT-D03-RF",
-            via_device=(DOMAIN, smart_home_id),
-            suggested_area=zone,
-        )
+        self._update_from_coordinator()
 
-    async def async_update(self) -> None:
-        """Update thermostat attributes from cached data."""
-        device = self._client.get_device(self._smart_home_id, self._device_id)
-        self._attr_available = device is not None
+    def _update_from_coordinator(self) -> None:
+        """Update thermostat attributes from coordinator data."""
+        device = self._device()
         if device is None:
             return
 
@@ -155,6 +146,12 @@ class WattsThermostat(ClimateEntity):
             self._attr_target_temperature,
             self._attr_current_temperature,
         )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._update_from_coordinator()
+        self.async_write_ha_state()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set the HVAC mode."""
@@ -227,7 +224,7 @@ class WattsThermostat(ClimateEntity):
 
     def _require_device(self) -> JsonObject:
         """Return the cached device or raise when unavailable."""
-        device = self._client.get_device(self._smart_home_id, self._device_id)
+        device = self._device()
         if device is None:
             msg = f"Watts Vision device {self._device_id} is unavailable"
             raise HomeAssistantError(msg)
@@ -246,7 +243,7 @@ class WattsThermostat(ClimateEntity):
         """Push a temperature update through the executor."""
         try:
             success = await self.hass.async_add_executor_job(
-                self._client.push_temperature,
+                self.coordinator.client.push_temperature,
                 self._smart_home_id,
                 self._api_device_id,
                 value,
@@ -258,3 +255,4 @@ class WattsThermostat(ClimateEntity):
         if not success:
             msg = "Watts Vision rejected the thermostat update"
             raise HomeAssistantError(msg)
+        self.coordinator.async_set_updated_data(self.coordinator.data)

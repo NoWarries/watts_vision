@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,11 +12,11 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers import device_registry as dr
 
-from .const import DEFAULT_SCAN_INTERVAL
-from .watts_api import WattsApi, WattsApiError, WattsAuthenticationError
+from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
+from .coordinator import WattsVisionDataUpdateCoordinator
+from .watts_api import WattsApi
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -32,7 +31,7 @@ PLATFORMS: tuple[Platform, ...] = (
 CONFIG_ENTRY_VERSION = 1
 CONFIG_ENTRY_MINOR_VERSION = 2
 
-type WattsVisionConfigEntry = ConfigEntry[WattsApi]
+type WattsVisionConfigEntry = ConfigEntry[WattsVisionDataUpdateCoordinator]
 
 
 async def async_setup_entry(
@@ -41,39 +40,23 @@ async def async_setup_entry(
 ) -> bool:
     """Set up Watts Vision from a config entry."""
     client = WattsApi(entry.data[CONF_USERNAME], entry.data[CONF_PASSWORD])
+    coordinator = WattsVisionDataUpdateCoordinator(hass, entry, client)
+    await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = coordinator
 
-    try:
-        await hass.async_add_executor_job(client.get_login_token)
-        await hass.async_add_executor_job(client.load_data)
-    except WattsAuthenticationError as err:
-        raise ConfigEntryAuthFailed from err
-    except WattsApiError as err:
-        raise ConfigEntryNotReady from err
-
-    entry.runtime_data = client
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    scan_interval = entry.options.get(
-        CONF_SCAN_INTERVAL,
-        entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-    )
-
-    async def async_refresh_devices(_now: datetime) -> None:
-        """Refresh cached device data."""
-        try:
-            await hass.async_add_executor_job(client.reload_devices)
-        except WattsAuthenticationError:
-            entry.async_start_reauth(hass)
-        except WattsApiError:
-            _LOGGER.exception("Unable to refresh Watts Vision devices")
-
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            async_refresh_devices,
-            timedelta(seconds=scan_interval),
+    device_registry = dr.async_get(hass)
+    for smart_home in coordinator.data.smart_homes:
+        smart_home_id = str(smart_home["smarthome_id"])
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, smart_home_id)},
+            connections={(dr.CONNECTION_NETWORK_MAC, str(smart_home["mac_address"]))},
+            manufacturer="Watts",
+            name=f"Central Unit {smart_home['label']}",
+            model="BT-CT02-RF",
         )
-    )
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
