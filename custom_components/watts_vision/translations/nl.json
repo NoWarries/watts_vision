@@ -62,6 +62,9 @@
     "hvac_mode_unsupported": {
       "message": "HVAC-modus {mode} wordt niet ondersteund door deze thermostaat"
     },
+    "preset_mode_unsupported": {
+      "message": "Voorinstelling {mode} wordt niet ondersteund door deze thermostaat"
+    },
     "temperature_limits_unavailable": {
       "message": "De temperatuurlimieten van de thermostaat zijn niet beschikbaar"
     },

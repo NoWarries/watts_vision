@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, override
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
+from typing import TYPE_CHECKING, Any, Final, override
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
@@ -14,6 +15,8 @@ from homeassistant.components.climate.const import (
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .api import (
     WattsVisionDevice,
@@ -22,11 +25,9 @@ from .api import (
     WattsVisionResponseError,
 )
 from .const import (
-    AVAILABLE_HEAT_MODES,
     AVAILABLE_TEMP_TYPES,
     DEVICE_TO_MODE_TYPE,
     DOMAIN,
-    HEAT_MODE_TO_DEVICE,
     TEMP_TYPE_TO_STATE_ATTRIBUTE,
     HeatMode,
     TempType,
@@ -42,7 +43,12 @@ if TYPE_CHECKING:
     from .coordinator import WattsVisionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-PARALLEL_UPDATES = 1
+PARALLEL_UPDATES = 0
+
+_CELSIUS_STEP: Final = Decimal("0.5")
+_FROST_CELSIUS: Final = 7.0
+_FROST_FAHRENHEIT: Final = 44.6
+_PREVIOUS_MODE_ATTRIBUTE: Final = "previous_device_mode"
 
 PROGRAM_MODES = frozenset(
     {
@@ -52,20 +58,34 @@ PROGRAM_MODES = frozenset(
         WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
     }
 )
-OFF_MODES = frozenset(
+TARGET_COMMANDABLE_MODES = frozenset(
     {
-        WattsVisionDeviceMode.FAN_DISABLED,
-        WattsVisionDeviceMode.OFF,
+        WattsVisionDeviceMode.COMFORT,
+        WattsVisionDeviceMode.ECO,
+        WattsVisionDeviceMode.BOOST,
+    }
+)
+STABLE_RESTORE_MODES = frozenset(
+    {
+        WattsVisionDeviceMode.COMFORT,
+        WattsVisionDeviceMode.ECO,
+        WattsVisionDeviceMode.FROST,
+        WattsVisionDeviceMode.PROGRAM_ECO,
     }
 )
 
 
 def _preset_name(mode: HeatMode | TempType) -> str:
-    """Return the legacy title-cased Home Assistant preset name."""
-    return mode.value.title()
+    """Return the retained title-cased Home Assistant preset name."""
+    return str(mode.value).title()
 
 
-PRESET_MODE_TO_HEAT_MODE = {_preset_name(mode): mode for mode in AVAILABLE_HEAT_MODES}
+PRESET_MODE_TO_DEVICE: Final = {
+    _preset_name(HeatMode.COMFORT): WattsVisionDeviceMode.COMFORT,
+    _preset_name(HeatMode.ECO): WattsVisionDeviceMode.ECO,
+    _preset_name(HeatMode.FROST): WattsVisionDeviceMode.FROST,
+    _preset_name(HeatMode.BOOST): WattsVisionDeviceMode.BOOST,
+}
 
 
 async def async_setup_entry(
@@ -116,16 +136,11 @@ async def async_setup_entry(
     config_entry.async_on_unload(coordinator.async_add_listener(async_add_new_entities))
 
 
-class WattsThermostat(WattsVisionEntity, ClimateEntity):
+class WattsThermostat(WattsVisionEntity, ClimateEntity, RestoreEntity):
     """Represent a Watts Vision thermostat."""
 
-    _attr_supported_features = (
-        ClimateEntityFeature.PRESET_MODE
-        | ClimateEntityFeature.TARGET_TEMPERATURE
-        | ClimateEntityFeature.TURN_OFF
-        | ClimateEntityFeature.TURN_ON
-    )
-    _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_target_temperature_step = 0.5
     _unrecorded_attributes = frozenset(
         {
             *TEMP_TYPE_TO_STATE_ATTRIBUTE.values(),
@@ -144,36 +159,54 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         self._api_device_id = api_device_id
         self._attr_unique_id = f"watts_thermostat_{context.device_id}"
         self._attr_name = None
-        self._attr_preset_modes = list(PRESET_MODE_TO_HEAT_MODE)
-        self._attr_target_temperature_step = 1.0
+        self._attr_preset_modes = list(PRESET_MODE_TO_DEVICE)
         self._attr_extra_state_attributes = {}
         self._previous_device_mode = WattsVisionDeviceMode.COMFORT
         self._update_from_coordinator()
 
-    def _update_from_coordinator(self) -> None:
-        """Update thermostat attributes from coordinator data."""
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Restore the last stable mode before subscribing to updates."""
+        await super().async_added_to_hass()
+        previous_state = await self.async_get_last_state()
+        if previous_state is None:
+            return
+        raw_mode = previous_state.attributes.get(_PREVIOUS_MODE_ATTRIBUTE)
+        try:
+            restored_mode = WattsVisionDeviceMode(str(raw_mode))
+        except ValueError:
+            return
+        if restored_mode in STABLE_RESTORE_MODES:
+            self._previous_device_mode = restored_mode
+            self._attr_extra_state_attributes[_PREVIOUS_MODE_ATTRIBUTE] = (
+                restored_mode.value
+            )
+
+    def _update_from_coordinator(self) -> None:  # noqa: PLR0912
+        """Update thermostat attributes from effective coordinator data."""
         device = self._device()
         if device is None:
             return
 
         device_mode = device.mode
-        if (
-            device_mode not in OFF_MODES
-            and device_mode is not WattsVisionDeviceMode.UNKNOWN
-        ):
-            self._previous_device_mode = device_mode
-        self._attr_current_temperature = device.air_temperature
-        if device_mode is WattsVisionDeviceMode.FROST:
-            self._attr_min_temp = 44.6
-            self._attr_max_temp = 44.6
-        else:
-            self._attr_min_temp = device.min_temperature
-            self._attr_max_temp = device.max_temperature
+        stable_mode = _stable_restore_mode(device_mode)
+        if stable_mode is not None:
+            self._previous_device_mode = stable_mode
 
-        if not device.is_heating:
-            self._attr_hvac_action = (
-                HVACAction.OFF if device_mode in OFF_MODES else HVACAction.IDLE
-            )
+        self._attr_current_temperature = _fahrenheit_to_celsius(device.air_temperature)
+        if device_mode is WattsVisionDeviceMode.FROST:
+            self._attr_min_temp = _FROST_CELSIUS
+            self._attr_max_temp = _FROST_CELSIUS
+        else:
+            self._attr_min_temp = _fahrenheit_to_celsius(device.min_temperature)
+            self._attr_max_temp = _fahrenheit_to_celsius(device.max_temperature)
+
+        if device_mode is WattsVisionDeviceMode.OFF:
+            self._attr_hvac_action = HVACAction.OFF
+        elif device_mode is WattsVisionDeviceMode.FAN:
+            self._attr_hvac_action = HVACAction.FAN
+        elif not device.is_heating:
+            self._attr_hvac_action = HVACAction.IDLE
         elif device.is_cooling:
             self._attr_hvac_action = HVACAction.COOLING
         else:
@@ -182,7 +215,7 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
         seasonal_mode = HVACMode.COOL if device.is_cooling else HVACMode.HEAT
         self._attr_hvac_modes = [seasonal_mode, HVACMode.AUTO, HVACMode.OFF]
         mode_info = DEVICE_TO_MODE_TYPE[device_mode]
-        if device_mode in OFF_MODES:
+        if device_mode is WattsVisionDeviceMode.OFF:
             self._attr_hvac_mode = HVACMode.OFF
             self._attr_preset_mode = None
             self._attr_target_temperature = None
@@ -193,26 +226,38 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
                 if mode_info.temp_type is not TempType.NONE
                 else None
             )
-            self._attr_target_temperature = device.target_temperature
+            self._attr_target_temperature = _optional_celsius(device.target_temperature)
         else:
             self._attr_hvac_mode = seasonal_mode
             self._attr_preset_mode = (
                 _preset_name(mode_info.heat_mode)
-                if mode_info.heat_mode is not HeatMode.UNKNOWN
+                if mode_info.heat_mode
+                in {HeatMode.COMFORT, HeatMode.ECO, HeatMode.FROST, HeatMode.BOOST}
                 else None
             )
-            self._attr_target_temperature = device.target_temperature
+            self._attr_target_temperature = _optional_celsius(device.target_temperature)
 
-        for temperature_type in AVAILABLE_TEMP_TYPES:
-            state_attribute = TEMP_TYPE_TO_STATE_ATTRIBUTE[temperature_type]
-            self._attr_extra_state_attributes[state_attribute] = temperature_for_type(
+        features = (
+            ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.TURN_OFF
+            | ClimateEntityFeature.TURN_ON
+        )
+        if device_mode in TARGET_COMMANDABLE_MODES:
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE
+        self._attr_supported_features = features
+
+        attributes: dict[str, Any] = {
+            TEMP_TYPE_TO_STATE_ATTRIBUTE[temperature_type]: temperature_for_type(
                 device,
                 temperature_type,
             )
-        self._attr_extra_state_attributes["gv_mode"] = device.wire_mode
+            for temperature_type in AVAILABLE_TEMP_TYPES
+        }
+        attributes["gv_mode"] = device.wire_mode
+        attributes[_PREVIOUS_MODE_ATTRIBUTE] = self._previous_device_mode.value
+        self._attr_extra_state_attributes = attributes
         _LOGGER.debug(
-            "Updated %s: mode=%s target=%s current=%s",
-            self._device_id,
+            "Updated Watts Vision thermostat: mode=%s target=%s current=%s",
             device_mode,
             self._attr_target_temperature,
             self._attr_current_temperature,
@@ -227,106 +272,81 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
 
     @override
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set the HVAC mode."""
+        """Set a deterministic Home Assistant HVAC mode."""
         device = self._require_device()
         seasonal_mode = HVACMode.COOL if device.is_cooling else HVACMode.HEAT
         if hvac_mode is HVACMode.OFF:
-            if device.mode not in OFF_MODES:
-                self._previous_device_mode = device.mode
-            device_mode = HEAT_MODE_TO_DEVICE[HeatMode.OFF]
+            device_mode = WattsVisionDeviceMode.OFF
             value = 0.0
         elif hvac_mode is HVACMode.AUTO:
-            device_mode = (
-                self._previous_device_mode
-                if self._previous_device_mode in PROGRAM_MODES
-                else WattsVisionDeviceMode.PROGRAM_ECO
-            )
-            value = self._temperature_for_mode(device, device_mode)
+            device_mode = WattsVisionDeviceMode.PROGRAM_ECO
+            value = device.eco_temperature
         elif hvac_mode is seasonal_mode:
-            device_mode = (
-                device.mode
-                if device.mode not in OFF_MODES | PROGRAM_MODES
-                and device.mode is not WattsVisionDeviceMode.UNKNOWN
-                else WattsVisionDeviceMode.COMFORT
-            )
-            value = self._temperature_for_mode(device, device_mode)
+            device_mode = WattsVisionDeviceMode.COMFORT
+            value = device.comfort_temperature
         else:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="hvac_mode_unsupported",
                 translation_placeholders={"mode": hvac_mode},
             )
-
-        value = self._clamp_temperature(value)
         await self._async_push_temperature(
             value,
             device_mode,
-            device.with_mode(device_mode, value),
+            update_target=False,
         )
 
     @override
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Set the thermostat preset mode."""
+        """Set a confirmed commandable thermostat preset."""
         device = self._require_device()
-        heat_mode = PRESET_MODE_TO_HEAT_MODE[preset_mode]
-        if heat_mode is HeatMode.OFF:
-            await self.async_turn_off()
-            return
-        if heat_mode is HeatMode.PROGRAM:
-            await self.async_set_hvac_mode(HVACMode.AUTO)
-            return
-        device_mode = HEAT_MODE_TO_DEVICE[heat_mode]
-        if heat_mode in {
-            HeatMode.FAN,
-            HeatMode.FAN_DISABLED,
-        }:
-            value = 0.0
-        else:
-            value = self._clamp_temperature(
-                self._temperature_for_mode(device, device_mode)
-            )
+        try:
+            device_mode = PRESET_MODE_TO_DEVICE[preset_mode]
+        except KeyError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="preset_mode_unsupported",
+                translation_placeholders={"mode": preset_mode},
+            ) from err
+        value = self._temperature_for_mode(device, device_mode)
         await self._async_push_temperature(
             value,
             device_mode,
-            device.with_mode(device_mode, value),
+            update_target=False,
         )
 
     @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set a new target temperature."""
+        """Set a target on the device's confirmed Celsius grid."""
         device = self._require_device()
-        device_mode = device.mode
-        mode_info = DEVICE_TO_MODE_TYPE[device_mode]
-        if (
-            mode_info.heat_mode is HeatMode.PROGRAM
-            or mode_info.temp_type is TempType.NONE
-        ):
-            # Watts rejects direct target-temperature writes in program mode.
+        if device.mode not in TARGET_COMMANDABLE_MODES:
+            mode_info = DEVICE_TO_MODE_TYPE[device.mode]
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="temperature_mode_unsupported",
                 translation_placeholders={"mode": mode_info.heat_mode.value},
             )
-
-        value = self._clamp_temperature(float(round(kwargs[ATTR_TEMPERATURE])))
+        requested_celsius = float(kwargs[ATTR_TEMPERATURE])
+        quantized_celsius = _quantize_celsius(requested_celsius, device)
+        value = _celsius_to_fahrenheit(quantized_celsius)
         await self._async_push_temperature(
             value,
-            device_mode,
-            device.with_target_temperature(value),
+            device.mode,
+            update_target=True,
         )
 
     @override
     async def async_turn_on(self) -> None:
-        """Turn on the thermostat using the last known active device mode."""
+        """Turn on using the last stable commandable mode."""
         device = self._require_device()
         device_mode = self._previous_device_mode
-        if device_mode in OFF_MODES or device_mode is WattsVisionDeviceMode.UNKNOWN:
+        if device_mode not in STABLE_RESTORE_MODES:
             device_mode = WattsVisionDeviceMode.COMFORT
-        value = self._clamp_temperature(self._temperature_for_mode(device, device_mode))
+        value = self._temperature_for_mode(device, device_mode)
         await self._async_push_temperature(
             value,
             device_mode,
-            device.with_mode(device_mode, value),
+            update_target=False,
         )
 
     @override
@@ -337,7 +357,7 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
     def _require_device(self) -> WattsVisionDevice:
         """Return the cached device or raise when unavailable."""
         device = self._device()
-        if device is None:
+        if device is None or not self.available:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="device_unavailable",
@@ -345,42 +365,32 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
             )
         return device
 
-    def _clamp_temperature(self, value: float) -> float:
-        """Clamp a temperature to the thermostat limits."""
-        minimum = self._attr_min_temp
-        maximum = self._attr_max_temp
-        if minimum is None or maximum is None:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="temperature_limits_unavailable",
-            )
-        return min(max(value, minimum), maximum)
-
     @staticmethod
     def _temperature_for_mode(
         device: WattsVisionDevice,
         mode: WattsVisionDeviceMode,
     ) -> float:
-        """Return a command value, including for modes without a target."""
+        """Return the Fahrenheit command value for a confirmed mode."""
+        if mode is WattsVisionDeviceMode.FROST:
+            return _FROST_FAHRENHEIT
         temperature_type = DEVICE_TO_MODE_TYPE[mode].temp_type
-        if temperature_type is TempType.NONE:
-            return device.manual_temperature
         return temperature_for_type(device, temperature_type)
 
     async def _async_push_temperature(
         self,
         value: float,
         device_mode: WattsVisionDeviceMode,
-        updated_device: WattsVisionDevice,
+        *,
+        update_target: bool,
     ) -> None:
-        """Push a temperature update and publish its optimistic state."""
+        """Push a command through coordinator reconciliation."""
         try:
             await self.coordinator.async_set_device_temperature(
                 self._smart_home_id,
-                self._api_device_id,
+                self._device_id,
                 value,
                 device_mode,
-                updated_device,
+                update_target=update_target,
             )
         except WattsVisionResponseError as err:
             raise HomeAssistantError(
@@ -392,3 +402,46 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity):
                 translation_domain=DOMAIN,
                 translation_key="thermostat_update_failed",
             ) from err
+
+
+def _stable_restore_mode(
+    mode: WattsVisionDeviceMode,
+) -> WattsVisionDeviceMode | None:
+    """Normalize a reported mode into a safe restart target."""
+    if mode in PROGRAM_MODES:
+        return WattsVisionDeviceMode.PROGRAM_ECO
+    return mode if mode in STABLE_RESTORE_MODES else None
+
+
+def _fahrenheit_to_celsius(value: float) -> float:
+    """Convert an API Fahrenheit value for Home Assistant."""
+    return TemperatureConverter.convert(
+        value,
+        UnitOfTemperature.FAHRENHEIT,
+        UnitOfTemperature.CELSIUS,
+    )
+
+
+def _celsius_to_fahrenheit(value: float) -> float:
+    """Convert a quantized Celsius value without binary arithmetic drift."""
+    converted = Decimal(str(value)) * Decimal("1.8") + Decimal(32)
+    return float(converted)
+
+
+def _optional_celsius(value: float | None) -> float | None:
+    """Convert an optional Fahrenheit temperature."""
+    return _fahrenheit_to_celsius(value) if value is not None else None
+
+
+def _quantize_celsius(value: float, device: WattsVisionDevice) -> float:
+    """Clamp and quantize one request to the thermostat's 0.5 °C grid."""
+    requested = Decimal(str(value))
+    minimum = Decimal(str(_fahrenheit_to_celsius(device.min_temperature)))
+    maximum = Decimal(str(_fahrenheit_to_celsius(device.max_temperature)))
+    minimum_tick = (minimum / _CELSIUS_STEP).to_integral_value(rounding=ROUND_CEILING)
+    maximum_tick = (maximum / _CELSIUS_STEP).to_integral_value(rounding=ROUND_FLOOR)
+    requested_tick = (requested / _CELSIUS_STEP).to_integral_value(
+        rounding=ROUND_HALF_UP
+    )
+    clamped_tick = min(max(requested_tick, minimum_tick), maximum_tick)
+    return float(clamped_tick * _CELSIUS_STEP)

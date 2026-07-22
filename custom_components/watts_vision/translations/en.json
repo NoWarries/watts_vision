@@ -62,6 +62,9 @@
     "hvac_mode_unsupported": {
       "message": "HVAC mode {mode} is not supported by this thermostat"
     },
+    "preset_mode_unsupported": {
+      "message": "Preset mode {mode} is not supported by this thermostat"
+    },
     "temperature_limits_unavailable": {
       "message": "The thermostat temperature limits are unavailable"
     },

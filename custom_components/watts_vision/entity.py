@@ -61,7 +61,14 @@ class WattsVisionEntity(CoordinatorEntity[WattsVisionDataUpdateCoordinator]):
     @override
     def available(self) -> bool:
         """Return whether the coordinator and device are available."""
-        return super().available and self._device() is not None
+        return (
+            super().available
+            and self._device() is not None
+            and self.coordinator.data.is_device_available(
+                self._smart_home_id,
+                self._device_id,
+            )
+        )
 
     def _device(self) -> WattsVisionDevice | None:
         """Return the device from the latest coordinator snapshot."""

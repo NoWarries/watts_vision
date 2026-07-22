@@ -205,6 +205,7 @@ class WattsVisionHubSensor(
         return (
             super().available
             and self.coordinator.data.get_smart_home(self._smart_home_id) is not None
+            and self.coordinator.data.is_home_available(self._smart_home_id)
         )
 
 
@@ -227,9 +228,17 @@ class WattsVisionLastCommunicationTimestampSensor(WattsVisionHubSensor):
 
     @property
     @override
+    def available(self) -> bool:
+        """Return whether fresh communication metadata is available."""
+        return super().available and self.coordinator.data.is_communication_available(
+            self._smart_home_id
+        )
+
+    @property
+    @override
     def native_value(self) -> datetime | None:
         """Return the estimated time of the last communication."""
         smart_home = self.coordinator.data.get_smart_home(self._smart_home_id)
-        if smart_home is None:
+        if smart_home is None or smart_home.last_communication is None:
             return None
         return dt_util.utcnow() - smart_home.last_communication.as_timedelta()

@@ -16,6 +16,7 @@ from homeassistant.components.climate.const import (
 from .api import WattsVisionDevice, WattsVisionDeviceMode
 
 DOMAIN = "watts_vision"
+INTEGRATION_VERSION = "0.9.0"
 
 LOGGER = logging.getLogger(__package__)
 
@@ -143,16 +144,16 @@ AVAILABLE_HEAT_MODES: tuple[HeatMode, ...] = (
     HeatMode.COMFORT,
     HeatMode.ECO,
     HeatMode.FROST,
-    HeatMode.PROGRAM,
     HeatMode.BOOST,
-    HeatMode.OFF,
-    HeatMode.FAN,
-    HeatMode.FAN_DISABLED,
-    HeatMode.MANUAL,
 )
 
 REPORTED_HEAT_MODES: tuple[HeatMode, ...] = (
     *AVAILABLE_HEAT_MODES,
+    HeatMode.PROGRAM,
+    HeatMode.OFF,
+    HeatMode.FAN,
+    HeatMode.FAN_DISABLED,
+    HeatMode.MANUAL,
     HeatMode.UNKNOWN,
 )
 

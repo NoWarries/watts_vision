@@ -48,6 +48,7 @@ class WattsVisionAuth:
         *,
         force_login: bool = False,
         force_refresh: bool = False,
+        rejected_token: str | None = None,
     ) -> str:
         """Return a valid access token."""
         now = time.monotonic()
@@ -61,6 +62,14 @@ class WattsVisionAuth:
 
         async with self._lock:
             now = time.monotonic()
+            if (
+                force_refresh
+                and rejected_token is not None
+                and self._access_token is not None
+                and self._access_token != rejected_token
+                and self._access_token_expires_at > now
+            ):
+                return self._access_token
             if (
                 not force_login
                 and not force_refresh

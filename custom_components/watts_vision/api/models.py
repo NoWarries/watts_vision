@@ -66,6 +66,17 @@ class WattsVisionCommunicationAge:
 
 
 @dataclass(frozen=True, slots=True)
+class WattsVisionHomeStatus:
+    """Describe the trustworthiness of one smart-home update."""
+
+    topology_fresh: bool = True
+    topology_complete: bool = True
+    communication_fresh: bool = True
+    malformed_records: int = 0
+    issues: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class WattsVisionDevice:
     """A Watts Vision thermostat."""
 
@@ -158,39 +169,26 @@ class WattsVisionDevice:
             manual_temperature=manual_temperature,
         )
 
-    def with_target_temperature(self, temperature: float) -> Self:
-        """Return a copy with an optimistic target-temperature update."""
-        if self.mode is WattsVisionDeviceMode.FROST:
-            return replace(
-                self,
-                frost_temperature=temperature,
-                manual_temperature=temperature,
-            )
-        if self.mode in {
-            WattsVisionDeviceMode.ECO,
-            WattsVisionDeviceMode.PROGRAM_ECO,
-        }:
-            return replace(
-                self,
-                eco_temperature=temperature,
-                manual_temperature=temperature,
-            )
-        if self.mode in {
-            WattsVisionDeviceMode.BOOST,
-            WattsVisionDeviceMode.PROGRAM_BOOST,
-        }:
-            return replace(
-                self,
-                boost_temperature=temperature,
-                manual_temperature=temperature,
-            )
-        if self.mode is WattsVisionDeviceMode.MANUAL:
-            return replace(self, manual_temperature=temperature)
-        return replace(
-            self,
-            comfort_temperature=temperature,
-            manual_temperature=temperature,
-        )
+    def with_command(
+        self,
+        mode: WattsVisionDeviceMode,
+        temperature: float,
+        *,
+        update_target: bool,
+    ) -> Self:
+        """Return the state expected after an accepted thermostat command."""
+        updated = self.with_mode(mode, temperature)
+        if not update_target and mode is WattsVisionDeviceMode.PROGRAM_ECO:
+            return updated
+        if mode is WattsVisionDeviceMode.COMFORT:
+            return replace(updated, comfort_temperature=temperature)
+        if mode is WattsVisionDeviceMode.ECO:
+            return replace(updated, eco_temperature=temperature)
+        if mode is WattsVisionDeviceMode.FROST:
+            return replace(updated, frost_temperature=temperature)
+        if mode is WattsVisionDeviceMode.BOOST:
+            return replace(updated, boost_temperature=temperature)
+        return updated
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +231,7 @@ class WattsVisionSmartHome:
     label: str
     mac_address: str
     zones: tuple[WattsVisionZone, ...]
-    last_communication: WattsVisionCommunicationAge
+    last_communication: WattsVisionCommunicationAge | None
 
     @classmethod
     def from_api(
@@ -254,14 +252,6 @@ class WattsVisionSmartHome:
             last_communication=WattsVisionCommunicationAge.from_api(communication_data),
         )
 
-    def get_device(self, device_id: str) -> WattsVisionDevice | None:
-        """Return a thermostat by identifier."""
-        for zone in self.zones:
-            for device in zone.devices:
-                if device.device_id == device_id:
-                    return device
-        return None
-
     def replace_device(self, updated_device: WattsVisionDevice) -> Self:
         """Return a copy containing an updated thermostat."""
         return replace(
@@ -275,6 +265,10 @@ class WattsVisionSnapshot:
     """A coherent Watts Vision account snapshot."""
 
     smart_homes: tuple[WattsVisionSmartHome, ...]
+    account_complete: bool = True
+    home_status: Mapping[str, WattsVisionHomeStatus] = field(default_factory=dict)
+    fresh_devices: frozenset[tuple[str, str]] | None = None
+    issues: tuple[str, ...] = ()
     _home_index: Mapping[str, WattsVisionSmartHome] = field(
         init=False,
         repr=False,
@@ -306,6 +300,13 @@ class WattsVisionSnapshot:
             raise WattsVisionResponseError(msg)
         object.__setattr__(self, "_home_index", MappingProxyType(home_index))
         object.__setattr__(self, "_device_index", MappingProxyType(device_index))
+        statuses = {
+            home_id: self.home_status.get(home_id, WattsVisionHomeStatus())
+            for home_id in home_index
+        }
+        object.__setattr__(self, "home_status", MappingProxyType(statuses))
+        if self.fresh_devices is None:
+            object.__setattr__(self, "fresh_devices", frozenset(device_index))
 
     def get_smart_home(self, smart_home_id: str) -> WattsVisionSmartHome | None:
         """Return a smart home by identifier."""
@@ -318,6 +319,21 @@ class WattsVisionSnapshot:
     ) -> WattsVisionDevice | None:
         """Return a thermostat by smart-home and device identifier."""
         return self._device_index.get((smart_home_id, device_id))
+
+    def is_home_available(self, smart_home_id: str) -> bool:
+        """Return whether a home's topology was refreshed successfully."""
+        status = self.home_status.get(smart_home_id)
+        return status is not None and status.topology_fresh
+
+    def is_communication_available(self, smart_home_id: str) -> bool:
+        """Return whether communication metadata is fresh."""
+        status = self.home_status.get(smart_home_id)
+        return status is not None and status.communication_fresh
+
+    def is_device_available(self, smart_home_id: str, device_id: str) -> bool:
+        """Return whether a thermostat record was refreshed successfully."""
+        fresh_devices = self.fresh_devices
+        return fresh_devices is not None and (smart_home_id, device_id) in fresh_devices
 
     def replace_device(
         self,

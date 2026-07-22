@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -29,12 +30,14 @@ from custom_components.watts_vision.api import (
     WattsVisionAuthenticationError,
     WattsVisionConnectionError,
     WattsVisionDeviceMode,
+    WattsVisionHomeStatus,
 )
 from custom_components.watts_vision.const import DEVICE_TO_MODE_TYPE, DOMAIN
 
 from .conftest import SMART_HOMES, snapshot_from_data
 
 MIGRATED_SCAN_INTERVAL = 600
+REMOVAL_CONFIRMATIONS = 3
 
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
@@ -247,7 +250,7 @@ async def test_authoritative_refresh_adds_and_removes_thermostat_devices(
         expanded_homes
     )
 
-    # Act - Refresh once to discover it, then once with a complete removal.
+    # Act - Refresh once to discover it, then require three complete absences.
     await coordinator.async_refresh()
     await hass.async_block_till_done()
     climate_id = _entity_id(hass, Platform.CLIMATE, "watts_thermostat_home-1#C002-000")
@@ -257,17 +260,62 @@ async def test_authoritative_refresh_adds_and_removes_thermostat_devices(
     child_device_id = climate_entry.device_id
     assert _state(hass, climate_id).state == "heat"
 
-    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data()
+    complete_absence = snapshot_from_data()
+    mock_watts_client.async_get_snapshot.return_value = complete_absence
     await coordinator.async_refresh()
     await hass.async_block_till_done()
+    partial_absence = replace(
+        complete_absence,
+        home_status={
+            "home-1": WattsVisionHomeStatus(
+                topology_fresh=True,
+                topology_complete=False,
+                communication_fresh=True,
+                malformed_records=1,
+                issues=("malformed_thermostat_records",),
+            )
+        },
+        fresh_devices=frozenset({("home-1", "home-1#C001-000")}),
+    )
+    mock_watts_client.async_get_snapshot.return_value = partial_absence
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    retained_device = dr.async_get(hass).async_get(child_device_id)
+    assert retained_device is not None
+    assert setup_integration.entry_id in retained_device.config_entries
 
-    # Assert - Keep the entity safely unavailable and dissociate the stale device.
+    mock_watts_client.async_get_snapshot.return_value = complete_absence
+    for absence_number in range(1, REMOVAL_CONFIRMATIONS + 1):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+        stale_device = dr.async_get(hass).async_get(child_device_id)
+        if absence_number < REMOVAL_CONFIRMATIONS:
+            assert stale_device is not None
+            assert setup_integration.entry_id in stale_device.config_entries
+
+    # Assert - Keep the entity unavailable and dissociate only after confirmation.
     assert _state(hass, climate_id).state == STATE_UNAVAILABLE
     stale_device = dr.async_get(hass).async_get(child_device_id)
     assert (
         stale_device is None
         or setup_integration.entry_id not in stale_device.config_entries
     )
+
+    # Act - A later complete snapshot may prove that the device returned.
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(
+        expanded_homes
+    )
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Assert - Preserve the entity identity while restoring its device association.
+    restored_climate_entry = er.async_get(hass).async_get(climate_id)
+    assert restored_climate_entry is not None
+    assert restored_climate_entry.device_id is not None
+    restored_device = dr.async_get(hass).async_get(restored_climate_entry.device_id)
+    assert restored_device is not None
+    assert setup_integration.entry_id in restored_device.config_entries
+    assert _state(hass, climate_id).state == "heat"
 
 
 async def test_authoritative_refresh_discovers_additional_home_topology(
@@ -404,6 +452,40 @@ async def test_coordinator_failure_and_recovery_logs_failure_once(
     assert coordinator.data is not previous_snapshot
     assert float(_state(hass, temperature_id).state) == pytest.approx(21.1111111111)
     assert coordinator.last_update_success
+
+
+async def test_communication_failure_only_marks_metadata_unavailable(
+    hass: HomeAssistant,
+    setup_integration: WattsVisionConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test climate data remains available when communication metadata fails."""
+    coordinator = setup_integration.runtime_data.coordinator
+    snapshot = snapshot_from_data()
+    partial = replace(
+        snapshot,
+        home_status={
+            "home-1": WattsVisionHomeStatus(
+                topology_fresh=True,
+                topology_complete=True,
+                communication_fresh=False,
+                issues=("communication_unavailable",),
+            )
+        },
+    )
+    mock_watts_client.async_get_snapshot.return_value = partial
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    temperature_id = _entity_id(
+        hass, Platform.SENSOR, "temperature_air_home-1#C001-000"
+    )
+    timestamp_id = _entity_id(
+        hass, Platform.SENSOR, "last_communication_timestamp_home-1"
+    )
+    assert _state(hass, temperature_id).state != STATE_UNAVAILABLE
+    assert _state(hass, timestamp_id).state == STATE_UNAVAILABLE
 
 
 async def test_options_reload_applies_scan_interval(
