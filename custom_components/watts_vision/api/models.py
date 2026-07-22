@@ -177,7 +177,14 @@ class WattsVisionDevice:
         update_target: bool,
     ) -> Self:
         """Return the state expected after an accepted thermostat command."""
-        updated = self.with_mode(mode, temperature)
+        # The production client submits Program Boost as a mode-only command.
+        # Keeping the previous manual target prevents reconciliation from waiting
+        # for a field that was never sent to the thermostat.
+        updated = (
+            replace(self, mode=mode, wire_mode=mode.value)
+            if mode is WattsVisionDeviceMode.PROGRAM_BOOST
+            else self.with_mode(mode, temperature)
+        )
         if not update_target and mode is WattsVisionDeviceMode.PROGRAM_ECO:
             return updated
         if mode is WattsVisionDeviceMode.COMFORT:

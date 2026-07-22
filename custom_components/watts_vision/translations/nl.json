@@ -65,6 +65,15 @@
     "preset_mode_unsupported": {
       "message": "Voorinstelling {mode} wordt niet ondersteund door deze thermostaat"
     },
+    "boost_duration_invalid": {
+      "message": "De boostduur moet een heel aantal minuten binnen het ondersteunde bereik zijn"
+    },
+    "program_update_failed": {
+      "message": "De huidige Watts Vision-programmafase kan niet worden bepaald"
+    },
+    "smart_home_not_communicating": {
+      "message": "De Watts Vision-centrale heeft {seconds} seconden niet gecommuniceerd; de thermostaatopdracht is daarom niet verzonden"
+    },
     "temperature_limits_unavailable": {
       "message": "De temperatuurlimieten van de thermostaat zijn niet beschikbaar"
     },
@@ -88,6 +97,11 @@
       },
       "heating": {
         "name": "Verwarming"
+      }
+    },
+    "number": {
+      "boost_duration": {
+        "name": "Boostduur"
       }
     },
     "sensor": {

@@ -19,6 +19,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .api import (
+    WattsVisionCommunicationStaleError,
     WattsVisionDevice,
     WattsVisionDeviceMode,
     WattsVisionError,
@@ -26,8 +27,10 @@ from .api import (
 )
 from .const import (
     AVAILABLE_TEMP_TYPES,
+    DEFAULT_BOOST_DURATION_MINUTES,
     DEVICE_TO_MODE_TYPE,
     DOMAIN,
+    SECONDS_PER_MINUTE,
     TEMP_TYPE_TO_STATE_ATTRIBUTE,
     HeatMode,
     TempType,
@@ -127,6 +130,7 @@ async def async_setup_entry(
                     coordinator,
                     current_devices[key][0],
                     current_devices[key][1],
+                    runtime_data.boost_durations,
                 )
                 for key in new_devices
             )
@@ -153,10 +157,17 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity, RestoreEntity):
         coordinator: WattsVisionDataUpdateCoordinator,
         context: WattsVisionEntityContext,
         api_device_id: str,
+        boost_durations: dict[tuple[str, str], int] | None = None,
     ) -> None:
         """Initialize a thermostat entity."""
         super().__init__(coordinator, context)
         self._api_device_id = api_device_id
+        self._boost_duration_key = (context.smart_home_id, context.device_id)
+        self._boost_durations = boost_durations if boost_durations is not None else {}
+        self._boost_durations.setdefault(
+            self._boost_duration_key,
+            DEFAULT_BOOST_DURATION_MINUTES,
+        )
         self._attr_unique_id = f"watts_thermostat_{context.device_id}"
         self._attr_name = None
         self._attr_preset_modes = list(PRESET_MODE_TO_DEVICE)
@@ -279,8 +290,8 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity, RestoreEntity):
             device_mode = WattsVisionDeviceMode.OFF
             value = 0.0
         elif hvac_mode is HVACMode.AUTO:
-            device_mode = WattsVisionDeviceMode.PROGRAM_ECO
-            value = device.eco_temperature
+            device_mode = await self._async_current_program_mode()
+            value = self._temperature_for_mode(device, device_mode)
         elif hvac_mode is seasonal_mode:
             device_mode = WattsVisionDeviceMode.COMFORT
             value = device.comfort_temperature
@@ -342,6 +353,8 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity, RestoreEntity):
         device_mode = self._previous_device_mode
         if device_mode not in STABLE_RESTORE_MODES:
             device_mode = WattsVisionDeviceMode.COMFORT
+        elif device_mode is WattsVisionDeviceMode.PROGRAM_ECO:
+            device_mode = await self._async_current_program_mode()
         value = self._temperature_for_mode(device, device_mode)
         await self._async_push_temperature(
             value,
@@ -384,14 +397,26 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity, RestoreEntity):
         update_target: bool,
     ) -> None:
         """Push a command through coordinator reconciliation."""
+        boost_duration = (
+            self._boost_durations[self._boost_duration_key] * SECONDS_PER_MINUTE
+            if device_mode is WattsVisionDeviceMode.BOOST
+            else None
+        )
         try:
             await self.coordinator.async_set_device_temperature(
                 self._smart_home_id,
                 self._device_id,
                 value,
                 device_mode,
+                boost_duration=boost_duration,
                 update_target=update_target,
             )
+        except WattsVisionCommunicationStaleError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="smart_home_not_communicating",
+                translation_placeholders={"seconds": str(err.age_seconds)},
+            ) from err
         except WattsVisionResponseError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
@@ -402,6 +427,19 @@ class WattsThermostat(WattsVisionEntity, ClimateEntity, RestoreEntity):
                 translation_domain=DOMAIN,
                 translation_key="thermostat_update_failed",
             ) from err
+
+    async def _async_current_program_mode(self) -> WattsVisionDeviceMode:
+        """Resolve a verified command mode for the current weekly-program phase."""
+        try:
+            mode = await self.coordinator.async_get_current_program_mode(
+                self._device_id
+            )
+        except WattsVisionError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="program_update_failed",
+            ) from err
+        return mode
 
 
 def _stable_restore_mode(

@@ -12,6 +12,8 @@ from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.watts_vision.api import (
+    WattsVisionCommunicationAge,
+    WattsVisionDeviceMode,
     WattsVisionSmartHome,
     WattsVisionSnapshot,
 )
@@ -121,6 +123,12 @@ def mock_watts_client() -> Generator[MagicMock]:
     ) as api_class:
         client: MagicMock = api_class.return_value
         client.async_get_snapshot = AsyncMock(return_value=snapshot_from_data())
+        client.async_get_current_program_mode = AsyncMock(
+            return_value=WattsVisionDeviceMode.PROGRAM_ECO
+        )
+        client.async_get_communication_age = AsyncMock(
+            return_value=WattsVisionCommunicationAge(0, 0, 0, 0)
+        )
         client.async_set_temperature = AsyncMock(return_value=None)
         yield client
 

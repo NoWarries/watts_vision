@@ -5,13 +5,13 @@ meta {
 }
 
 post {
-  url: https://smarthome.wattselectronics.com/api/v0.1/human/user/read/
+  url: {{apiBaseUrl}}/user/read/
   body: formUrlEncoded
-  auth: none
+  auth: bearer
 }
 
-headers {
-  Authorization: Bearer {{accessToken}}
+auth:bearer {
+  token: {{accessToken}}
 }
 
 body:form-urlencoded {
@@ -26,3 +26,4 @@ script:post-response {
     bru.setVar("smartHomeId", smartHomes[0].smarthome_id);
   }
 }
+

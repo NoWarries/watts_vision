@@ -15,3 +15,4 @@ class WattsVisionRuntimeData:
 
     coordinator: WattsVisionDataUpdateCoordinator
     parent_device_ids: dict[str, str]
+    boost_durations: dict[tuple[str, str], int]

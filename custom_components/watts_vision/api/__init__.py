@@ -3,6 +3,7 @@
 from .client import WattsVisionClient
 from .exceptions import (
     WattsVisionAuthenticationError,
+    WattsVisionCommunicationStaleError,
     WattsVisionConnectionError,
     WattsVisionError,
     WattsVisionResponseError,
@@ -21,6 +22,7 @@ __all__ = [
     "WattsVisionAuthenticationError",
     "WattsVisionClient",
     "WattsVisionCommunicationAge",
+    "WattsVisionCommunicationStaleError",
     "WattsVisionConnectionError",
     "WattsVisionDevice",
     "WattsVisionDeviceMode",

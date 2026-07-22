@@ -65,6 +65,15 @@
     "preset_mode_unsupported": {
       "message": "Preset mode {mode} is not supported by this thermostat"
     },
+    "boost_duration_invalid": {
+      "message": "Boost duration must be a whole number of minutes within the supported range"
+    },
+    "program_update_failed": {
+      "message": "Unable to determine the current Watts Vision program phase"
+    },
+    "smart_home_not_communicating": {
+      "message": "The Watts Vision central unit has not communicated for {seconds} seconds, so the thermostat command was not sent"
+    },
     "temperature_limits_unavailable": {
       "message": "The thermostat temperature limits are unavailable"
     },
@@ -88,6 +97,11 @@
       },
       "heating": {
         "name": "Heating"
+      }
+    },
+    "number": {
+      "boost_duration": {
+        "name": "Boost duration"
       }
     },
     "sensor": {

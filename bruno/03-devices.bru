@@ -5,13 +5,13 @@ meta {
 }
 
 post {
-  url: https://smarthome.wattselectronics.com/api/v0.1/human/smarthome/read/
+  url: {{apiBaseUrl}}/smarthome/read/
   body: formUrlEncoded
-  auth: none
+  auth: bearer
 }
 
-headers {
-  Authorization: Bearer {{accessToken}}
+auth:bearer {
+  token: {{accessToken}}
 }
 
 body:form-urlencoded {

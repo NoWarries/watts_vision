@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 from http import HTTPStatus
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -40,6 +41,7 @@ PUSH_URL = f"{API_URL}/query/push/"
 USER_URL = f"{API_URL}/user/read/"
 HOME_URL = f"{API_URL}/smarthome/read/"
 COMMUNICATION_URL = f"{API_URL}/sandbox/check_last_connexion/"
+PROGRAM_URL = f"{API_URL}/sandbox/convert_program/"
 EXPECTED_AIR_TEMPERATURE = 71.5
 REFRESHED_AIR_TEMPERATURE = 70.0
 EXPECTED_COMMAND_COUNT = 2
@@ -261,6 +263,32 @@ async def test_authenticated_request_retries_once_after_unauthorized() -> None:
         assert requests[1].kwargs["headers"]["Authorization"] == (
             "Bearer replacement-token"
         )
+
+
+async def test_communication_age_uses_production_preflight_payload() -> None:
+    """Test the live command-safety check returns a normalized duration."""
+    communication = {
+        "diff": "61",
+        "diffObj": {"days": 0, "hours": 0, "minutes": 1, "seconds": 1},
+    }
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        _post(
+            mocked_responses,
+            COMMUNICATION_URL,
+            payload=_success(communication),
+        )
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+
+            age = await client.async_get_communication_age("home-1")
+
+    assert age == WattsVisionCommunicationAge(0, 0, 1, 1)
+    assert _request_data(mocked_responses, COMMUNICATION_URL) == {
+        "token": "true",
+        "smarthome_id": "home-1",
+        "lang": "nl_NL",
+    }
 
 
 async def test_concurrent_unauthorized_requests_share_forced_refresh() -> None:
@@ -887,9 +915,19 @@ def test_device_model_supports_all_known_and_future_modes(
             },
         ),
         (
+            WattsVisionDeviceMode.PROGRAM_COMFORT,
+            68.0,
+            {"query[consigne_manuel]": "680"},
+        ),
+        (
             WattsVisionDeviceMode.PROGRAM_ECO,
             62.0,
             {"query[consigne_manuel]": "620"},
+        ),
+        (
+            WattsVisionDeviceMode.PROGRAM_BOOST,
+            72.0,
+            {},
         ),
     ],
 )
@@ -952,10 +990,8 @@ async def test_temperature_command_rejects_unknown_mode_without_request() -> Non
     [
         WattsVisionDeviceMode.FAN,
         WattsVisionDeviceMode.FAN_DISABLED,
-        WattsVisionDeviceMode.PROGRAM_COMFORT,
         WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
         WattsVisionDeviceMode.MANUAL,
-        WattsVisionDeviceMode.PROGRAM_BOOST,
         WattsVisionDeviceMode.UNKNOWN,
     ],
 )
@@ -976,6 +1012,182 @@ async def test_temperature_command_rejects_unverified_modes_without_request(
                 )
 
         assert not mocked_responses.requests
+
+
+async def test_boost_command_uses_configured_duration() -> None:
+    """Test Boost uses the selected whole-minute duration on the wire."""
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        _post(mocked_responses, PUSH_URL, payload=SUCCESS_RESPONSE)
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+            await client.async_set_temperature(
+                "home-1",
+                "device-1",
+                72.0,
+                WattsVisionDeviceMode.BOOST,
+                boost_duration=180,
+            )
+
+        assert _request_data(mocked_responses, PUSH_URL)["query[time_boost]"] == "180"
+
+
+@pytest.mark.parametrize("duration", [179, 180.5, 181, 3_801_600])
+async def test_boost_command_rejects_invalid_duration(duration: float) -> None:
+    """Test out-of-range or partial-minute Boost durations perform no I/O."""
+    with aioresponses() as mocked_responses:
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+            with pytest.raises(WattsVisionResponseError):
+                await client.async_set_temperature(
+                    "home-1",
+                    "device-1",
+                    72.0,
+                    WattsVisionDeviceMode.BOOST,
+                    boost_duration=duration,
+                )
+        assert not mocked_responses.requests
+
+
+async def test_boost_command_accepts_verified_maximum_duration() -> None:
+    """Test the production timer's 43-day 23-hour 59-minute maximum."""
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        _post(mocked_responses, PUSH_URL, payload=SUCCESS_RESPONSE)
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+            await client.async_set_temperature(
+                "home-1",
+                "device-1",
+                72.0,
+                WattsVisionDeviceMode.BOOST,
+                boost_duration=3_801_540,
+            )
+
+        assert (
+            _request_data(mocked_responses, PUSH_URL)["query[time_boost]"] == "3801540"
+        )
+
+
+def test_program_boost_optimistic_update_preserves_manual_temperature() -> None:
+    """Test the mode-only Program Boost command changes no retained target."""
+    device = WattsVisionDevice.from_api(_device())
+
+    updated = device.with_command(
+        WattsVisionDeviceMode.PROGRAM_BOOST,
+        device.boost_temperature,
+        update_target=False,
+    )
+
+    assert updated.mode is WattsVisionDeviceMode.PROGRAM_BOOST
+    assert updated.wire_mode == "16"
+    assert updated.manual_temperature == device.manual_temperature
+    assert updated.boost_temperature == device.boost_temperature
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "expected_mode"),
+    [
+        (5, 59, WattsVisionDeviceMode.PROGRAM_ECO),
+        (6, 0, WattsVisionDeviceMode.PROGRAM_COMFORT),
+        (7, 30, WattsVisionDeviceMode.PROGRAM_COMFORT),
+        (8, 0, WattsVisionDeviceMode.PROGRAM_COMFORT),
+        (8, 1, WattsVisionDeviceMode.PROGRAM_ECO),
+    ],
+)
+async def test_current_program_mode_resolves_comfort_and_eco(
+    hour: int,
+    minute: int,
+    expected_mode: WattsVisionDeviceMode,
+) -> None:
+    """Test AUTO uses the normalized period active at local HA time."""
+    program = {
+        "0": {"nowday": "2", "nice": []},
+        "2": {"nice": {"0": {"start": "06:00", "end": "08:00", "value": "comfort"}}},
+    }
+    now = datetime(2026, 7, 22, hour, minute, tzinfo=UTC)
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        _post(mocked_responses, PROGRAM_URL, payload=_success({"program": program}))
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+            mode = await client.async_get_current_program_mode("device-1", now)
+
+        assert mode is expected_mode
+        assert _request_data(mocked_responses, PROGRAM_URL) == {
+            "device_id": "device-1",
+            "width": "278",
+            "now": str(int(now.timestamp())),
+            "lang": "nl_NL",
+        }
+
+
+async def test_current_program_mode_reports_scheduled_boost() -> None:
+    """Test a scheduled Boost remains distinguishable from commandable phases."""
+    program = {
+        "0": {
+            "nowday": "0",
+            "nice": [{"start": "00:00", "end": "00:00", "value": "booster"}],
+        }
+    }
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        _post(mocked_responses, PROGRAM_URL, payload=_success({"program": program}))
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+            mode = await client.async_get_current_program_mode(
+                "device-1", datetime(2026, 7, 20, 12, tzinfo=UTC)
+            )
+
+    assert mode is WattsVisionDeviceMode.PROGRAM_BOOST
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        {},
+        {"0": {"nice": []}},
+        {"0": {"nowday": "7", "nice": []}},
+        {"0": {"nowday": "0", "nice": "invalid"}},
+        {
+            "0": {
+                "nowday": "0",
+                "nice": [{"start": "invalid", "end": "00:00", "value": "comfort"}],
+            }
+        },
+        {
+            "0": {
+                "nowday": "0",
+                "nice": [{"start": "aa:00", "end": "00:00", "value": "comfort"}],
+            }
+        },
+        {
+            "0": {
+                "nowday": "0",
+                "nice": [{"start": "10:00", "end": "09:00", "value": "comfort"}],
+            }
+        },
+        {
+            "0": {
+                "nowday": "0",
+                "nice": [{"start": "24:00", "end": "00:00", "value": "comfort"}],
+            }
+        },
+    ],
+)
+async def test_current_program_mode_rejects_malformed_data(
+    program: dict[str, object],
+) -> None:
+    """Test malformed schedules cannot silently select the wrong phase."""
+    with aioresponses() as mocked_responses:
+        _post(mocked_responses, AUTH_URL, payload=AUTH_RESPONSE)
+        _post(mocked_responses, PROGRAM_URL, payload=_success({"program": program}))
+        async with ClientSession() as session:
+            client = WattsVisionClient("user@example.com", "secret", session=session)
+            with pytest.raises(WattsVisionResponseError):
+                await client.async_get_current_program_mode(
+                    "device-1", datetime(2026, 7, 20, 12, tzinfo=UTC)
+                )
 
 
 async def test_temperature_command_encodes_fahrenheit_tenths_once() -> None:

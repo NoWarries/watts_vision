@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from custom_components.watts_vision.api import (
+    WattsVisionCommunicationAge,
+    WattsVisionCommunicationStaleError,
     WattsVisionConnectionError,
     WattsVisionDeviceMode,
     WattsVisionError,
@@ -82,6 +84,25 @@ async def test_stale_polls_are_overlaid_until_command_confirmation(
         ).result
         == "confirmed"
     )
+
+
+async def test_confirmation_window_covers_observed_twelve_minute_delivery(
+    setup_integration: MockConfigEntry,
+) -> None:
+    """Test accepted commands remain pending beyond the live delivery delay."""
+    coordinator = setup_integration.runtime_data.coordinator
+    key = ("home-1", "home-1#C001-000")
+
+    await coordinator.async_set_device_temperature(
+        *key,
+        68.9,
+        WattsVisionDeviceMode.COMFORT,
+        update_target=True,
+    )
+
+    pending = coordinator._pending_commands[key]  # noqa: SLF001
+    assert pending.deadline - pending.accepted_at == 15 * 60
+    assert pending.deadline - pending.accepted_at > 12 * 60
 
 
 async def test_degraded_snapshot_cannot_confirm_or_expire_command(
@@ -281,6 +302,61 @@ async def test_failed_command_leaves_state_unchanged(
 
     assert coordinator.data is original
     assert not coordinator._pending_commands  # noqa: SLF001
+
+
+async def test_stale_central_unit_rejects_command_before_push(
+    setup_integration: MockConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test live communication older than 60 seconds prevents false optimism."""
+    coordinator = setup_integration.runtime_data.coordinator
+    original = coordinator.data
+    mock_watts_client.async_get_communication_age.return_value = (
+        WattsVisionCommunicationAge(0, 0, 1, 1)
+    )
+
+    with pytest.raises(WattsVisionCommunicationStaleError) as error:
+        await coordinator.async_set_device_temperature(
+            "home-1",
+            "home-1#C001-000",
+            62.0,
+            WattsVisionDeviceMode.ECO,
+            update_target=False,
+        )
+
+    assert error.value.age_seconds == 61
+    assert coordinator.data is original
+    mock_watts_client.async_set_temperature.assert_not_awaited()
+
+
+async def test_command_preflight_allows_exact_threshold_and_check_failure(
+    setup_integration: MockConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test the production client's exact boundary and fail-open behavior."""
+    coordinator = setup_integration.runtime_data.coordinator
+    mock_watts_client.async_get_communication_age.return_value = (
+        WattsVisionCommunicationAge(0, 0, 1, 0)
+    )
+    await coordinator.async_set_device_temperature(
+        "home-1",
+        "home-1#C001-000",
+        62.0,
+        WattsVisionDeviceMode.ECO,
+        update_target=False,
+    )
+    mock_watts_client.async_get_communication_age.side_effect = WattsVisionError(
+        "communication check unavailable"
+    )
+    await coordinator.async_set_device_temperature(
+        "home-1",
+        "home-1#C001-000",
+        68.0,
+        WattsVisionDeviceMode.COMFORT,
+        update_target=False,
+    )
+
+    assert mock_watts_client.async_set_temperature.await_count == 2
 
 
 async def test_command_for_missing_thermostat_fails_before_api_call(

@@ -29,6 +29,7 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform.BINARY_SENSOR,
     Platform.SENSOR,
     Platform.CLIMATE,
+    Platform.NUMBER,
 )
 CONFIG_ENTRY_VERSION = 1
 CONFIG_ENTRY_MINOR_VERSION = 3
@@ -82,6 +83,7 @@ async def async_setup_entry(
     entry.runtime_data = WattsVisionRuntimeData(
         coordinator=coordinator,
         parent_device_ids=parent_device_ids,
+        boost_durations={},
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

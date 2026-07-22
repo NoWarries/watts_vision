@@ -218,6 +218,52 @@ async def test_retained_compatibility_entities_can_be_reenabled(
     )
 
 
+@pytest.mark.parametrize(
+    ("wire_mode", "expected_temperature_mode"),
+    [("8", "comfort"), ("11", "eco"), ("13", "none"), ("16", "boost")],
+)
+async def test_pr24_mode_sensors_cover_every_program_variant(
+    hass: HomeAssistant,
+    setup_integration: WattsVisionConfigEntry,
+    mock_watts_client: MagicMock,
+    wire_mode: str,
+    expected_temperature_mode: str,
+) -> None:
+    """Test PR #24 compatibility sensors retain and extend Program reporting."""
+    registry = er.async_get(hass)
+    preset_id = _entity_id(hass, Platform.SENSOR, "thermostat_mode_home-1#C001-000")
+    temperature_mode_id = _entity_id(
+        hass, Platform.SENSOR, "temperature_mode_home-1#C001-000"
+    )
+    registry.async_update_entity(preset_id, disabled_by=None)
+    registry.async_update_entity(temperature_mode_id, disabled_by=None)
+    await hass.config_entries.async_reload(setup_integration.entry_id)
+    await hass.async_block_till_done()
+
+    homes = [
+        {
+            **SMART_HOMES[0],
+            "zones": [
+                {
+                    **SMART_HOMES[0]["zones"][0],
+                    "devices": [
+                        {
+                            **SMART_HOMES[0]["zones"][0]["devices"][0],
+                            "gv_mode": wire_mode,
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(homes)
+    await setup_integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert _state(hass, preset_id).state == "program"
+    assert _state(hass, temperature_mode_id).state == expected_temperature_mode
+
+
 async def test_authoritative_refresh_adds_and_removes_thermostat_devices(
     hass: HomeAssistant,
     setup_integration: WattsVisionConfigEntry,

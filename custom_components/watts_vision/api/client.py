@@ -5,12 +5,18 @@ from __future__ import annotations
 import asyncio
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from http import HTTPStatus
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from .auth import WattsVisionAuth
-from .const import API_URL, REQUEST_TIMEOUT
+from .const import (
+    API_URL,
+    DEFAULT_BOOST_DURATION_SECONDS,
+    MAX_BOOST_DURATION_SECONDS,
+    MIN_BOOST_DURATION_SECONDS,
+    REQUEST_TIMEOUT,
+)
 from .exceptions import (
     WattsVisionAuthenticationError,
     WattsVisionConnectionError,
@@ -35,9 +41,18 @@ COMMANDABLE_DEVICE_MODES = frozenset(
         WattsVisionDeviceMode.FROST,
         WattsVisionDeviceMode.ECO,
         WattsVisionDeviceMode.BOOST,
+        WattsVisionDeviceMode.PROGRAM_COMFORT,
         WattsVisionDeviceMode.PROGRAM_ECO,
+        WattsVisionDeviceMode.PROGRAM_BOOST,
     }
 )
+_LAST_PROGRAM_DAY = 6
+_PROGRAM_TIME_PARTS = 2
+_LAST_HOUR = 23
+_LAST_MINUTE = 59
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 class WattsVisionClient:
@@ -164,12 +179,22 @@ class WattsVisionClient:
         device_id: str,
         temperature: float,
         mode: WattsVisionDeviceMode,
+        *,
+        boost_duration: int = DEFAULT_BOOST_DURATION_SECONDS,
     ) -> None:
         """Set a thermostat temperature and mode."""
         if mode not in COMMANDABLE_DEVICE_MODES:
             msg = f"Cannot command Watts Vision thermostat mode {mode.value}"
             raise WattsVisionResponseError(msg)
         value = _encode_temperature_tenths(temperature)
+        if mode is WattsVisionDeviceMode.BOOST and (
+            not MIN_BOOST_DURATION_SECONDS
+            <= boost_duration
+            <= MAX_BOOST_DURATION_SECONDS
+            or boost_duration % 60
+        ):
+            msg = "Boost duration must be a whole minute within device limits"
+            raise WattsVisionResponseError(msg)
         payload = {
             "token": "true",
             "context": "1",
@@ -197,14 +222,48 @@ class WattsVisionClient:
                 "query[consigne_manuel]": value,
             },
             WattsVisionDeviceMode.BOOST: {
-                "query[time_boost]": "7200",
+                "query[time_boost]": str(boost_duration),
                 "query[consigne_boost]": value,
                 "query[consigne_manuel]": value,
             },
+            WattsVisionDeviceMode.PROGRAM_COMFORT: {"query[consigne_manuel]": value},
             WattsVisionDeviceMode.PROGRAM_ECO: {"query[consigne_manuel]": value},
+            WattsVisionDeviceMode.PROGRAM_BOOST: {},
         }
         payload.update(mode_payloads[mode])
         await self._async_post("/query/push/", data=payload)
+
+    async def async_get_communication_age(
+        self,
+        smart_home_id: str,
+    ) -> WattsVisionCommunicationAge:
+        """Return a central unit's current server communication age."""
+        data = await self._async_post_data(
+            "/sandbox/check_last_connexion/",
+            data={
+                "token": "true",
+                "smarthome_id": smart_home_id,
+                "lang": "nl_NL",
+            },
+        )
+        return WattsVisionCommunicationAge.from_api(data)
+
+    async def async_get_current_program_mode(
+        self,
+        device_id: str,
+        now: datetime,
+    ) -> WattsVisionDeviceMode:
+        """Resolve the thermostat program phase exactly as the Watts client does."""
+        data = await self._async_post_data(
+            "/sandbox/convert_program/",
+            data={
+                "device_id": device_id,
+                "width": "278",
+                "now": str(int(now.timestamp())),
+                "lang": "nl_NL",
+            },
+        )
+        return _resolve_program_mode(data, now)
 
     async def _async_get_smart_home(
         self,
@@ -400,6 +459,70 @@ def _required_text(
         msg = f"Watts Vision returned empty {key} data"
         raise WattsVisionResponseError(msg)
     return text
+
+
+def _resolve_program_mode(
+    data: JsonObject,
+    now: datetime,
+) -> WattsVisionDeviceMode:
+    """Resolve the current normalized program period from an API response."""
+    program = _as_object(data.get("program"), "program")
+    metadata = _as_object(program.get("0"), "program metadata")
+    try:
+        day_index = int(metadata["nowday"])
+    except (KeyError, TypeError, ValueError) as err:
+        msg = "Watts Vision returned invalid program day metadata"
+        raise WattsVisionResponseError(msg) from err
+    if not 0 <= day_index <= _LAST_PROGRAM_DAY:
+        msg = "Watts Vision returned an out-of-range program day"
+        raise WattsVisionResponseError(msg)
+
+    day = _as_object(program.get(str(day_index)), "program day")
+    raw_periods = day.get("nice")
+    if isinstance(raw_periods, dict):
+        periods = list(raw_periods.values())
+    elif isinstance(raw_periods, list):
+        periods = raw_periods
+    else:
+        msg = "Watts Vision returned invalid program periods"
+        raise WattsVisionResponseError(msg)
+
+    current_minute = now.hour * 60 + now.minute
+    current_mode = WattsVisionDeviceMode.PROGRAM_ECO
+    for raw_period in periods:
+        period = _as_object(raw_period, "program period")
+        value = _required_text(period, "value")
+        if value not in {"comfort", "booster"}:
+            continue
+        start = _parse_program_time(_required_text(period, "start"))
+        end = _parse_program_time(_required_text(period, "end"))
+        if start > end:
+            msg = "Watts Vision returned an inverted program period"
+            raise WattsVisionResponseError(msg)
+        if start == end or start <= current_minute <= end:
+            current_mode = (
+                WattsVisionDeviceMode.PROGRAM_COMFORT
+                if value == "comfort"
+                else WattsVisionDeviceMode.PROGRAM_BOOST
+            )
+    return current_mode
+
+
+def _parse_program_time(value: str) -> int:
+    """Parse one 24-hour program boundary into minutes after midnight."""
+    parts = value.split(":")
+    if len(parts) != _PROGRAM_TIME_PARTS:
+        msg = "Watts Vision returned an invalid program time"
+        raise WattsVisionResponseError(msg)
+    try:
+        hour, minute = (int(part) for part in parts)
+    except ValueError as err:
+        msg = "Watts Vision returned an invalid program time"
+        raise WattsVisionResponseError(msg) from err
+    if not 0 <= hour <= _LAST_HOUR or not 0 <= minute <= _LAST_MINUTE:
+        msg = "Watts Vision returned an out-of-range program time"
+        raise WattsVisionResponseError(msg)
+    return hour * 60 + minute
 
 
 def _parse_zones(  # noqa: PLR0912, PLR0915

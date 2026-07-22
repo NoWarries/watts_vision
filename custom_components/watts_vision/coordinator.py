@@ -22,6 +22,7 @@ from homeassistant.util import dt as dt_util
 from .api import (
     WattsVisionAuthenticationError,
     WattsVisionClient,
+    WattsVisionCommunicationStaleError,
     WattsVisionDevice,
     WattsVisionDeviceMode,
     WattsVisionError,
@@ -37,9 +38,10 @@ if TYPE_CHECKING:
 
     from . import WattsVisionConfigEntry
 
-_COMMAND_CONFIRMATION_TIMEOUT: Final = 60.0
+_COMMAND_CONFIRMATION_TIMEOUT: Final = 15 * 60.0
 _INITIAL_COMMAND_REFRESH_DELAY: Final = 2.0
-_COMMAND_REFRESH_INTERVAL: Final = 5.0
+_COMMAND_REFRESH_INTERVAL: Final = 30.0
+_MAX_COMMAND_COMMUNICATION_AGE_SECONDS: Final = 60
 _REMOVAL_CONFIRMATIONS: Final = 3
 _RECONCILED_FIELDS: Final = (
     "mode",
@@ -365,19 +367,36 @@ class WattsVisionDataUpdateCoordinator(DataUpdateCoordinator[WattsVisionSnapshot
                 )
         return current_devices
 
-    async def async_set_device_temperature(
+    async def async_set_device_temperature(  # noqa: PLR0913
         self,
         smart_home_id: str,
         device_id: str,
         temperature: float,
         mode: WattsVisionDeviceMode,
         *,
+        boost_duration: int | None = None,
         update_target: bool,
     ) -> None:
         """Send and optimistically publish a serialized thermostat command."""
         key = (smart_home_id, device_id)
         lock = self._device_locks.setdefault(key, asyncio.Lock())
         async with lock:
+            try:
+                communication_age = await self._client.async_get_communication_age(
+                    smart_home_id
+                )
+            except WattsVisionAuthenticationError:
+                raise
+            except WattsVisionError:
+                # The production client allows commands when this optional
+                # safety check is itself unavailable.
+                LOGGER.debug(
+                    "Unable to verify Watts Vision communication age before command"
+                )
+            else:
+                age_seconds = int(communication_age.as_timedelta().total_seconds())
+                if age_seconds > _MAX_COMMAND_COMMUNICATION_AGE_SECONDS:
+                    raise WattsVisionCommunicationStaleError(age_seconds)
             baseline = self.data.get_device(smart_home_id, device_id)
             if baseline is None:
                 msg = "Watts Vision thermostat disappeared before command execution"
@@ -388,12 +407,21 @@ class WattsVisionDataUpdateCoordinator(DataUpdateCoordinator[WattsVisionSnapshot
                 update_target=update_target,
             )
             try:
-                await self._client.async_set_temperature(
-                    smart_home_id,
-                    baseline.api_device_id,
-                    temperature,
-                    mode,
-                )
+                if boost_duration is None:
+                    await self._client.async_set_temperature(
+                        smart_home_id,
+                        baseline.api_device_id,
+                        temperature,
+                        mode,
+                    )
+                else:
+                    await self._client.async_set_temperature(
+                        smart_home_id,
+                        baseline.api_device_id,
+                        temperature,
+                        mode,
+                        boost_duration=boost_duration,
+                    )
             except WattsVisionError:
                 self._last_command_results[key] = CommandResult(
                     result="failed",
@@ -451,6 +479,16 @@ class WattsVisionDataUpdateCoordinator(DataUpdateCoordinator[WattsVisionSnapshot
                 self.data.replace_device(smart_home_id, optimistic)
             )
             self._schedule_reconciliation(_INITIAL_COMMAND_REFRESH_DELAY)
+
+    async def async_get_current_program_mode(
+        self,
+        device_id: str,
+    ) -> WattsVisionDeviceMode:
+        """Resolve the active weekly-program phase using Home Assistant time."""
+        return await self._client.async_get_current_program_mode(
+            device_id,
+            dt_util.now(),
+        )
 
     @callback
     def _schedule_reconciliation(self, delay: float) -> None:
