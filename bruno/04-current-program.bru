@@ -1,0 +1,35 @@
+meta {
+  name: Read current thermostat program
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{apiBaseUrl}}/sandbox/convert_program/
+  body: formUrlEncoded
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:form-urlencoded {
+  device_id: {{deviceId}}
+  width: 278
+  now: {{currentEpoch}}
+  lang: nl_NL
+}
+
+script:pre-request {
+  bru.setVar("currentEpoch", String(Math.floor(Date.now() / 1000)));
+}
+
+tests {
+  test("returns a converted weekly program", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.code).to.be.an("object");
+    expect(res.body.code.key).to.match(/^OK/);
+    expect(res.body.data.program).to.be.an("object");
+  });
+}
