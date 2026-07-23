@@ -25,8 +25,8 @@ class WattsVisionDeviceMode(StrEnum):
     FROST = "2"
     ECO = "3"
     BOOST = "4"
-    FAN = "5"
-    FAN_DISABLED = "6"
+    MODE_5 = "5"
+    MODE_6 = "6"
     PROGRAM_COMFORT = "8"
     PROGRAM_ECO = "11"
     PROGRAM_UNSPECIFIED = "13"
@@ -132,8 +132,8 @@ class WattsVisionDevice:
         """Return the active target temperature."""
         if self.mode in {
             WattsVisionDeviceMode.OFF,
-            WattsVisionDeviceMode.FAN,
-            WattsVisionDeviceMode.FAN_DISABLED,
+            WattsVisionDeviceMode.MODE_5,
+            WattsVisionDeviceMode.MODE_6,
             WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
             WattsVisionDeviceMode.UNKNOWN,
         }:
@@ -159,14 +159,12 @@ class WattsVisionDevice:
     def with_mode(
         self,
         mode: WattsVisionDeviceMode,
-        manual_temperature: float,
     ) -> Self:
         """Return a copy with an optimistic mode update."""
         return replace(
             self,
             mode=mode,
             wire_mode=mode.value,
-            manual_temperature=manual_temperature,
         )
 
     def with_command(
@@ -177,24 +175,19 @@ class WattsVisionDevice:
         update_target: bool,
     ) -> Self:
         """Return the state expected after an accepted thermostat command."""
-        # The production client submits Program Boost as a mode-only command.
-        # Keeping the previous manual target prevents reconciliation from waiting
-        # for a field that was never sent to the thermostat.
-        updated = (
-            replace(self, mode=mode, wire_mode=mode.value)
-            if mode is WattsVisionDeviceMode.PROGRAM_BOOST
-            else self.with_mode(mode, temperature)
-        )
-        if not update_target and mode is WattsVisionDeviceMode.PROGRAM_ECO:
+        updated = self.with_mode(mode)
+        if not update_target:
             return updated
         if mode is WattsVisionDeviceMode.COMFORT:
             return replace(updated, comfort_temperature=temperature)
         if mode is WattsVisionDeviceMode.ECO:
             return replace(updated, eco_temperature=temperature)
-        if mode is WattsVisionDeviceMode.FROST:
-            return replace(updated, frost_temperature=temperature)
         if mode is WattsVisionDeviceMode.BOOST:
-            return replace(updated, boost_temperature=temperature)
+            return replace(
+                updated,
+                manual_temperature=temperature,
+                boost_temperature=temperature,
+            )
         return updated
 
 

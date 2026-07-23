@@ -68,9 +68,6 @@
     "boost_duration_invalid": {
       "message": "Boost duration must be a whole number of minutes within the supported range"
     },
-    "program_update_failed": {
-      "message": "Unable to determine the current Watts Vision program phase"
-    },
     "smart_home_not_communicating": {
       "message": "The Watts Vision central unit has not communicated for {seconds} seconds, so the thermostat command was not sent"
     },
@@ -91,6 +88,20 @@
     }
   },
   "entity": {
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "boost": "Boost",
+              "comfort": "Comfort",
+              "eco": "Eco",
+              "frost_protection": "Frost protection"
+            }
+          }
+        }
+      }
+    },
     "binary_sensor": {
       "battery_low": {
         "name": "Battery"
@@ -101,7 +112,7 @@
     },
     "number": {
       "boost_duration": {
-        "name": "Boost duration"
+        "name": "Next Boost duration"
       }
     },
     "sensor": {
@@ -117,8 +128,6 @@
           "boost": "Boost",
           "comfort": "Comfort",
           "eco": "Eco",
-          "fan": "Fan",
-          "fan_disabled": "Fan disabled",
           "frost": "Frost protection",
           "manual": "Manual",
           "off": "Off",

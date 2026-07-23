@@ -68,9 +68,6 @@
     "boost_duration_invalid": {
       "message": "De boostduur moet een heel aantal minuten binnen het ondersteunde bereik zijn"
     },
-    "program_update_failed": {
-      "message": "De huidige Watts Vision-programmafase kan niet worden bepaald"
-    },
     "smart_home_not_communicating": {
       "message": "De Watts Vision-centrale heeft {seconds} seconden niet gecommuniceerd; de thermostaatopdracht is daarom niet verzonden"
     },
@@ -91,6 +88,20 @@
     }
   },
   "entity": {
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "boost": "Boost",
+              "comfort": "Comfort",
+              "eco": "Eco",
+              "frost_protection": "Vorstbeveiliging"
+            }
+          }
+        }
+      }
+    },
     "binary_sensor": {
       "battery_low": {
         "name": "Batterij"
@@ -101,7 +112,7 @@
     },
     "number": {
       "boost_duration": {
-        "name": "Boostduur"
+        "name": "Volgende boostduur"
       }
     },
     "sensor": {
@@ -117,8 +128,6 @@
           "boost": "Boost",
           "comfort": "Comfort",
           "eco": "Eco",
-          "fan": "Ventilator",
-          "fan_disabled": "Ventilator uitgeschakeld",
           "frost": "Vorstbeveiliging",
           "manual": "Handmatig",
           "off": "Uit",

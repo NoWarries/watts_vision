@@ -30,11 +30,10 @@ if TYPE_CHECKING:
 
 
 def _snapshot_with_target(target: str) -> WattsVisionSnapshot:
-    """Return a Comfort snapshot with matching target and manual fields."""
+    """Return a Comfort snapshot with only its profile target changed."""
     device = {
         **SMART_HOMES[0]["zones"][0]["devices"][0],
         "consigne_confort": target,
-        "consigne_manuel": target,
     }
     homes = [
         {
@@ -86,7 +85,52 @@ async def test_stale_polls_are_overlaid_until_command_confirmation(
     )
 
 
-async def test_confirmation_window_covers_observed_twelve_minute_delivery(
+async def test_generic_program_command_confirms_on_resolved_phase(
+    setup_integration: MockConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test mode 13 may legitimately return as the active Program phase."""
+    coordinator = setup_integration.runtime_data.coordinator
+    key = ("home-1", "home-1#C001-000")
+    await coordinator.async_set_device_temperature(
+        *key,
+        68.0,
+        WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
+        update_target=False,
+    )
+    optimistic = coordinator.data.get_device(*key)
+    assert optimistic is not None
+    assert optimistic.mode is WattsVisionDeviceMode.PROGRAM_UNSPECIFIED
+
+    device = {
+        **SMART_HOMES[0]["zones"][0]["devices"][0],
+        "gv_mode": WattsVisionDeviceMode.PROGRAM_COMFORT.value,
+    }
+    homes = [
+        {
+            **SMART_HOMES[0],
+            "zones": [
+                {
+                    **SMART_HOMES[0]["zones"][0],
+                    "devices": [device],
+                }
+            ],
+        }
+    ]
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(homes)
+    await coordinator.async_refresh()
+
+    confirmed = coordinator.data.get_device(*key)
+    assert confirmed is not None
+    assert confirmed.mode is WattsVisionDeviceMode.PROGRAM_COMFORT
+    assert not coordinator._pending_commands  # noqa: SLF001
+    assert (
+        coordinator._last_command_results[key].result  # noqa: SLF001
+        == "confirmed"
+    )
+
+
+async def test_confirmation_window_covers_observed_delivery_delay(
     setup_integration: MockConfigEntry,
 ) -> None:
     """Test accepted commands remain pending beyond the live delivery delay."""
@@ -101,8 +145,8 @@ async def test_confirmation_window_covers_observed_twelve_minute_delivery(
     )
 
     pending = coordinator._pending_commands[key]  # noqa: SLF001
-    assert pending.deadline - pending.accepted_at == 15 * 60
-    assert pending.deadline - pending.accepted_at > 12 * 60
+    assert pending.deadline - pending.accepted_at == 90
+    assert pending.deadline - pending.accepted_at > 21
 
 
 async def test_degraded_snapshot_cannot_confirm_or_expire_command(

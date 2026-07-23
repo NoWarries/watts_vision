@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, override
 
-from homeassistant.components.number import (
-    NumberDeviceClass,
-    NumberMode,
-    RestoreNumber,
-)
+from homeassistant.components.number import NumberDeviceClass, NumberMode, RestoreNumber
 from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
@@ -77,11 +73,11 @@ class WattsBoostDurationNumber(WattsVisionEntity, RestoreNumber):
 
     _attr_device_class = NumberDeviceClass.DURATION
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_mode = NumberMode.BOX
     _attr_native_max_value = float(MAX_BOOST_DURATION_MINUTES)
     _attr_native_min_value = float(MIN_BOOST_DURATION_MINUTES)
     _attr_native_step = 1.0
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_mode = NumberMode.BOX
     _attr_translation_key = "boost_duration"
 
     def __init__(

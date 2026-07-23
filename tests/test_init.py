@@ -219,17 +219,24 @@ async def test_retained_compatibility_entities_can_be_reenabled(
 
 
 @pytest.mark.parametrize(
-    ("wire_mode", "expected_temperature_mode"),
-    [("8", "comfort"), ("11", "eco"), ("13", "none"), ("16", "boost")],
+    ("wire_mode", "expected_modes"),
+    [
+        ("5", ("unknown", "none")),
+        ("6", ("unknown", "none")),
+        ("8", ("program", "comfort")),
+        ("11", ("program", "eco")),
+        ("13", ("program", "none")),
+        ("16", ("program", "boost")),
+    ],
 )
-async def test_pr24_mode_sensors_cover_every_program_variant(
+async def test_mode_sensors_report_only_supported_meanings(
     hass: HomeAssistant,
     setup_integration: WattsVisionConfigEntry,
     mock_watts_client: MagicMock,
     wire_mode: str,
-    expected_temperature_mode: str,
+    expected_modes: tuple[str, str],
 ) -> None:
-    """Test PR #24 compatibility sensors retain and extend Program reporting."""
+    """Test ambiguous modes stay unknown while Program phases remain distinct."""
     registry = er.async_get(hass)
     preset_id = _entity_id(hass, Platform.SENSOR, "thermostat_mode_home-1#C001-000")
     temperature_mode_id = _entity_id(
@@ -260,8 +267,8 @@ async def test_pr24_mode_sensors_cover_every_program_variant(
     await setup_integration.runtime_data.coordinator.async_refresh()
     await hass.async_block_till_done()
 
-    assert _state(hass, preset_id).state == "program"
-    assert _state(hass, temperature_mode_id).state == expected_temperature_mode
+    assert _state(hass, preset_id).state == expected_modes[0]
+    assert _state(hass, temperature_mode_id).state == expected_modes[1]
 
 
 async def test_authoritative_refresh_adds_and_removes_thermostat_devices(
@@ -583,7 +590,7 @@ async def test_migrate_entry_moves_polling_option_and_sets_unique_id(
 async def test_migrate_entry_removes_only_retired_registry_entities(
     hass: HomeAssistant,
 ) -> None:
-    """Test migration removes fabricated sensors but preserves replacements."""
+    """Test migration removes retired entities but preserves replacements."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Existing",
@@ -602,6 +609,7 @@ async def test_migrate_entry_removes_only_retired_registry_entities(
     replacement_entities = (
         (Platform.BINARY_SENSOR, "battery_low_home-1#C001-000"),
         (Platform.SENSOR, "last_communication_timestamp_home-1"),
+        (Platform.NUMBER, "boost_duration_home-1#C001-000"),
     )
     for platform, unique_id in (*retired_entities, *replacement_entities):
         registry.async_get_or_create(

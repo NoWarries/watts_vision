@@ -33,7 +33,7 @@ async def test_diagnostics_are_useful_and_redacted(
     diagnostics = await async_get_config_entry_diagnostics(hass, setup_integration)
     serialized = json.dumps(diagnostics)
 
-    assert diagnostics["integration_version"] == "0.9.0"
+    assert diagnostics["integration_version"] == "1.0.0"
     assert diagnostics["scan_interval"] == DEFAULT_SCAN_INTERVAL
     assert diagnostics["coordinator"]["pending_commands"]
     assert "user@example.com" not in serialized

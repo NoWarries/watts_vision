@@ -41,7 +41,7 @@ def _async_remove_retired_entities(
     hass: HomeAssistant,
     entry: WattsVisionConfigEntry,
 ) -> None:
-    """Remove registry entries for retired fabricated compatibility sensors."""
+    """Remove registry entries for retired or misleading entities."""
     entity_registry = er.async_get(hass)
     for registry_entry in er.async_entries_for_config_entry(
         entity_registry,

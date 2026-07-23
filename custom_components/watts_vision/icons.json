@@ -1,5 +1,19 @@
 {
   "entity": {
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "boost": "mdi:fire",
+              "comfort": "mdi:thermometer",
+              "eco": "mdi:leaf",
+              "frost_protection": "mdi:snowflake"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "preset_mode": {
         "default": "mdi:thermostat-cog"

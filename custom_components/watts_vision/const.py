@@ -21,7 +21,7 @@ from .api.const import (
 )
 
 DOMAIN = "watts_vision"
-INTEGRATION_VERSION = "0.9.0"
+INTEGRATION_VERSION = "1.0.0"
 
 LOGGER = logging.getLogger(__package__)
 
@@ -34,7 +34,7 @@ DEFAULT_BOOST_DURATION_MINUTES = DEFAULT_BOOST_DURATION_SECONDS // SECONDS_PER_M
 MIN_BOOST_DURATION_MINUTES = MIN_BOOST_DURATION_SECONDS // SECONDS_PER_MINUTE
 MAX_BOOST_DURATION_MINUTES = MAX_BOOST_DURATION_SECONDS // SECONDS_PER_MINUTE
 
-PRESET_DEFROST = "Frost Protection"
+PRESET_DEFROST = "frost_protection"
 PRESET_OFF = "Off"
 PRESET_PROGRAM = "Program"
 
@@ -48,8 +48,6 @@ class HeatMode(Enum):
     PROGRAM = PRESET_PROGRAM
     ECO = PRESET_ECO
     BOOST = PRESET_BOOST
-    FAN = "Fan"
-    FAN_DISABLED = "Fan Disabled"
     MANUAL = "Manual"
     UNKNOWN = "Unknown"
 
@@ -80,11 +78,8 @@ DEVICE_TO_MODE_TYPE: dict[WattsVisionDeviceMode, ModeInfo] = {
     WattsVisionDeviceMode.FROST: ModeInfo(HeatMode.FROST, TempType.FROST),
     WattsVisionDeviceMode.ECO: ModeInfo(HeatMode.ECO, TempType.ECO),
     WattsVisionDeviceMode.BOOST: ModeInfo(HeatMode.BOOST, TempType.BOOST),
-    WattsVisionDeviceMode.FAN: ModeInfo(HeatMode.FAN, TempType.NONE),
-    WattsVisionDeviceMode.FAN_DISABLED: ModeInfo(
-        HeatMode.FAN_DISABLED,
-        TempType.NONE,
-    ),
+    WattsVisionDeviceMode.MODE_5: ModeInfo(HeatMode.UNKNOWN, TempType.NONE),
+    WattsVisionDeviceMode.MODE_6: ModeInfo(HeatMode.UNKNOWN, TempType.NONE),
     WattsVisionDeviceMode.PROGRAM_COMFORT: ModeInfo(HeatMode.PROGRAM, TempType.COMFORT),
     WattsVisionDeviceMode.PROGRAM_ECO: ModeInfo(HeatMode.PROGRAM, TempType.ECO),
     WattsVisionDeviceMode.PROGRAM_UNSPECIFIED: ModeInfo(
@@ -97,27 +92,6 @@ DEVICE_TO_MODE_TYPE: dict[WattsVisionDeviceMode, ModeInfo] = {
         TempType.BOOST,
     ),
     WattsVisionDeviceMode.UNKNOWN: ModeInfo(HeatMode.UNKNOWN, TempType.NONE),
-}
-
-HEAT_MODE_TO_DEVICE: dict[HeatMode, WattsVisionDeviceMode] = {
-    HeatMode.ECO: WattsVisionDeviceMode.ECO,
-    HeatMode.FROST: WattsVisionDeviceMode.FROST,
-    HeatMode.COMFORT: WattsVisionDeviceMode.COMFORT,
-    HeatMode.PROGRAM: WattsVisionDeviceMode.PROGRAM_ECO,
-    HeatMode.BOOST: WattsVisionDeviceMode.BOOST,
-    HeatMode.OFF: WattsVisionDeviceMode.OFF,
-    HeatMode.FAN: WattsVisionDeviceMode.FAN,
-    HeatMode.FAN_DISABLED: WattsVisionDeviceMode.FAN_DISABLED,
-    HeatMode.MANUAL: WattsVisionDeviceMode.MANUAL,
-}
-
-TEMP_TYPE_TO_STATE_ATTRIBUTE: dict[TempType, str] = {
-    TempType.ECO: "consigne_eco",
-    TempType.FROST: "consigne_hg",
-    TempType.COMFORT: "consigne_confort",
-    TempType.CURRENT: "temperature_air",
-    TempType.MANUAL: "consigne_manuel",
-    TempType.BOOST: "consigne_boost",
 }
 
 
@@ -161,8 +135,6 @@ REPORTED_HEAT_MODES: tuple[HeatMode, ...] = (
     *AVAILABLE_HEAT_MODES,
     HeatMode.PROGRAM,
     HeatMode.OFF,
-    HeatMode.FAN,
-    HeatMode.FAN_DISABLED,
     HeatMode.MANUAL,
     HeatMode.UNKNOWN,
 )

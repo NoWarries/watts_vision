@@ -38,9 +38,9 @@ if TYPE_CHECKING:
 
     from . import WattsVisionConfigEntry
 
-_COMMAND_CONFIRMATION_TIMEOUT: Final = 15 * 60.0
+_COMMAND_CONFIRMATION_TIMEOUT: Final = 90.0
 _INITIAL_COMMAND_REFRESH_DELAY: Final = 2.0
-_COMMAND_REFRESH_INTERVAL: Final = 30.0
+_COMMAND_REFRESH_INTERVAL: Final = 5.0
 _MAX_COMMAND_COMMUNICATION_AGE_SECONDS: Final = 60
 _REMOVAL_CONFIRMATIONS: Final = 3
 _RECONCILED_FIELDS: Final = (
@@ -51,6 +51,14 @@ _RECONCILED_FIELDS: Final = (
     "frost_temperature",
     "manual_temperature",
     "boost_temperature",
+)
+_PROGRAM_MODES: Final = frozenset(
+    {
+        WattsVisionDeviceMode.PROGRAM_COMFORT,
+        WattsVisionDeviceMode.PROGRAM_ECO,
+        WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
+        WattsVisionDeviceMode.PROGRAM_BOOST,
+    }
 )
 
 
@@ -163,10 +171,7 @@ class WattsVisionDataUpdateCoordinator(DataUpdateCoordinator[WattsVisionSnapshot
                 continue
 
             if all(
-                _values_equal(
-                    getattr(raw_device, field),
-                    getattr(pending.optimistic, field),
-                )
+                _field_confirms_command(raw_device, pending, field)
                 for field in pending.changed_fields
             ):
                 self._finish_command(key, pending, "confirmed")
@@ -480,16 +485,6 @@ class WattsVisionDataUpdateCoordinator(DataUpdateCoordinator[WattsVisionSnapshot
             )
             self._schedule_reconciliation(_INITIAL_COMMAND_REFRESH_DELAY)
 
-    async def async_get_current_program_mode(
-        self,
-        device_id: str,
-    ) -> WattsVisionDeviceMode:
-        """Resolve the active weekly-program phase using Home Assistant time."""
-        return await self._client.async_get_current_program_mode(
-            device_id,
-            dt_util.now(),
-        )
-
     @callback
     def _schedule_reconciliation(self, delay: float) -> None:
         """Schedule a single shared reconciliation refresh."""
@@ -612,3 +607,18 @@ def _values_equal(left: object, right: object) -> bool:
     if isinstance(left, float) and isinstance(right, float):
         return math.isclose(left, right, abs_tol=0.05)
     return left == right
+
+
+def _field_confirms_command(
+    raw_device: WattsVisionDevice,
+    pending: PendingCommand,
+    field: str,
+) -> bool:
+    """Accept any resolved Program phase for a generic Program command."""
+    actual = getattr(raw_device, field)
+    if pending.requested_mode is WattsVisionDeviceMode.PROGRAM_UNSPECIFIED:
+        if field == "mode":
+            return actual in _PROGRAM_MODES
+        if field == "wire_mode":
+            return actual in {mode.value for mode in _PROGRAM_MODES}
+    return _values_equal(actual, getattr(pending.optimistic, field))

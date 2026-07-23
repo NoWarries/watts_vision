@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import ANY, call
+from unittest.mock import call
 
 import pytest
 from homeassistant.components.climate import (
@@ -21,6 +21,12 @@ from homeassistant.components.climate import (
 from homeassistant.components.climate import (
     DOMAIN as CLIMATE_DOMAIN,
 )
+from homeassistant.components.climate.const import (
+    ClimateEntityFeature,
+    PRESET_BOOST,
+    PRESET_COMFORT,
+    PRESET_ECO,
+)
 from homeassistant.const import ATTR_ENTITY_ID, Platform
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -33,7 +39,12 @@ from custom_components.watts_vision.api import (
     WattsVisionResponseError,
 )
 from custom_components.watts_vision.climate import WattsThermostat
-from custom_components.watts_vision.const import DOMAIN
+from custom_components.watts_vision.const import (
+    DOMAIN,
+    PRESET_DEFROST,
+    TempType,
+    temperature_for_type,
+)
 from custom_components.watts_vision.entity import WattsVisionEntityContext
 
 from .conftest import SMART_HOMES, snapshot_from_data
@@ -47,17 +58,31 @@ if TYPE_CHECKING:
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
-def test_legacy_raw_attributes_are_excluded_from_recorder() -> None:
-    """Test compatibility attributes remain available without history growth."""
-    assert {
-        "consigne_eco",
-        "consigne_hg",
-        "consigne_confort",
-        "consigne_manuel",
-        "consigne_boost",
-        "temperature_air",
-        "gv_mode",
-    } <= WattsThermostat._unrecorded_attributes  # noqa: SLF001
+@pytest.mark.parametrize(
+    ("temperature_type", "attribute"),
+    [
+        (TempType.FROST, "frost_temperature"),
+        (TempType.CURRENT, "air_temperature"),
+        (TempType.MANUAL, "manual_temperature"),
+        (TempType.BOOST, "boost_temperature"),
+    ],
+)
+def test_reported_temperature_types_use_their_own_values(
+    temperature_type: TempType,
+    attribute: str,
+) -> None:
+    """Test read-only compatibility states retain distinct temperatures."""
+    device = snapshot_from_data().get_device("home-1", "home-1#C001-000")
+    assert device is not None
+    assert temperature_for_type(device, temperature_type) == getattr(device, attribute)
+
+
+def test_non_temperature_type_has_no_fabricated_value() -> None:
+    """Test a mode without a temperature cannot become a target."""
+    device = snapshot_from_data().get_device("home-1", "home-1#C001-000")
+    assert device is not None
+    with pytest.raises(ValueError, match="has no device value"):
+        temperature_for_type(device, TempType.NONE)
 
 
 async def test_climate_commands_preserve_api_payloads(
@@ -77,11 +102,13 @@ async def test_climate_commands_preserve_api_payloads(
     state = hass.states.get(entity_id)
     assert state is not None
     assert state.attributes["preset_modes"] == [
-        "Comfort",
-        "Eco",
-        "Frost Protection",
-        "Boost",
+        PRESET_COMFORT,
+        PRESET_ECO,
+        PRESET_DEFROST,
+        PRESET_BOOST,
     ]
+    assert "consigne_manuel" not in state.attributes
+    assert "gv_mode" not in state.attributes
     assert state.attributes["target_temp_step"] == HALF_CELSIUS
 
     # Act - Send temperature and HVAC mode commands.
@@ -188,7 +215,7 @@ async def test_stale_central_unit_reports_clear_command_error(
         await hass.services.async_call(
             CLIMATE_DOMAIN,
             SERVICE_SET_PRESET_MODE,
-            {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: "Eco"},
+            {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: PRESET_ECO},
             blocking=True,
         )
 
@@ -197,18 +224,17 @@ async def test_stale_central_unit_reports_clear_command_error(
 
 
 @pytest.mark.parametrize(
-    ("wire_mode", "preset"),
-    [("8", "Comfort"), ("11", "Eco"), ("16", "Boost"), ("13", None)],
+    "wire_mode",
+    ["8", "11", "16", "13"],
     ids=("comfort", "eco", "boost", "unspecified"),
 )
-async def test_program_variants_report_auto_with_active_preset(
+async def test_program_variants_are_reported_as_auto(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
     mock_watts_client: MagicMock,
     wire_mode: str,
-    preset: str | None,
 ) -> None:
-    """Test scheduled programs use AUTO while retaining their active preset."""
+    """Test every resolved planning phase is one read-only AUTO state."""
     coordinator = setup_integration.runtime_data.coordinator
     homes = [
         {
@@ -238,7 +264,8 @@ async def test_program_variants_report_auto_with_active_preset(
     state = hass.states.get(entity_id)
     assert state is not None
     assert state.state == HVACMode.AUTO
-    assert state.attributes.get(ATTR_PRESET_MODE) == preset
+    assert state.attributes.get(ATTR_PRESET_MODE) is None
+    assert HVACMode.AUTO in state.attributes[ATTR_HVAC_MODES]
 
 
 @pytest.mark.parametrize("wire_mode", ["8", "11", "13", "16"])
@@ -336,12 +363,12 @@ async def test_climate_advertises_only_the_commandable_season(
         )
 
 
-async def test_auto_and_manual_hvac_commands_use_program_and_comfort_modes(
+async def test_auto_uses_generic_program_and_seasonal_mode_selects_comfort(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
     mock_watts_client: MagicMock,
 ) -> None:
-    """Test HVAC AUTO and seasonal manual commands use supported API modes."""
+    """Test AUTO sends generic Program without resolving or writing schedules."""
     _ = setup_integration
     entity_id = er.async_get(hass).async_get_entity_id(
         Platform.CLIMATE, DOMAIN, "watts_thermostat_home-1#C001-000"
@@ -355,13 +382,6 @@ async def test_auto_and_manual_hvac_commands_use_program_and_comfort_modes(
         {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.AUTO},
         blocking=True,
     )
-    with pytest.raises(HomeAssistantError):
-        await hass.services.async_call(
-            CLIMATE_DOMAIN,
-            SERVICE_SET_TEMPERATURE,
-            {ATTR_ENTITY_ID: entity_id, ATTR_TEMPERATURE: 20},
-            blocking=True,
-        )
     await hass.services.async_call(
         CLIMATE_DOMAIN,
         SERVICE_SET_HVAC_MODE,
@@ -370,82 +390,304 @@ async def test_auto_and_manual_hvac_commands_use_program_and_comfort_modes(
     )
 
     assert mock_watts_client.async_set_temperature.await_args_list == [
-        call("home-1", "api-device-1", 62.0, WattsVisionDeviceMode.PROGRAM_ECO),
-        call("home-1", "api-device-1", 68.0, WattsVisionDeviceMode.COMFORT),
-    ]
-    mock_watts_client.async_get_current_program_mode.assert_awaited_once()
-
-
-async def test_auto_uses_current_program_comfort_phase(
-    hass: HomeAssistant,
-    setup_integration: MockConfigEntry,
-    mock_watts_client: MagicMock,
-) -> None:
-    """Test AUTO commands Program Comfort when that schedule period is active."""
-    _ = setup_integration
-    mock_watts_client.async_get_current_program_mode.return_value = (
-        WattsVisionDeviceMode.PROGRAM_COMFORT
-    )
-    entity_id = er.async_get(hass).async_get_entity_id(
-        Platform.CLIMATE, DOMAIN, "watts_thermostat_home-1#C001-000"
-    )
-    assert entity_id is not None
-    mock_watts_client.reset_mock()
-
-    await hass.services.async_call(
-        CLIMATE_DOMAIN,
-        SERVICE_SET_HVAC_MODE,
-        {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.AUTO},
-        blocking=True,
-    )
-
-    mock_watts_client.async_get_current_program_mode.assert_awaited_once()
-    mock_watts_client.async_set_temperature.assert_awaited_once_with(
-        "home-1",
-        "api-device-1",
-        68.0,
-        WattsVisionDeviceMode.PROGRAM_COMFORT,
-    )
-    assert mock_watts_client.method_calls == [
-        call.async_get_current_program_mode("home-1#C001-000", ANY),
-        call.async_get_communication_age("home-1"),
-        call.async_set_temperature(
+        call(
             "home-1",
             "api-device-1",
             68.0,
-            WattsVisionDeviceMode.PROGRAM_COMFORT,
+            WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
+        ),
+        call(
+            "home-1",
+            "api-device-1",
+            68.0,
+            WattsVisionDeviceMode.COMFORT,
         ),
     ]
 
 
-async def test_auto_uses_current_program_boost_phase(
+async def test_boost_requests_heat_and_remains_temperature_commandable(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
     mock_watts_client: MagicMock,
 ) -> None:
-    """Test AUTO commands the production client's Program Boost mode."""
-    _ = setup_integration
-    mock_watts_client.async_get_current_program_mode.return_value = (
-        WattsVisionDeviceMode.PROGRAM_BOOST
-    )
+    """Test heating Boost crosses room temperature and remains writable."""
+    coordinator = setup_integration.runtime_data.coordinator
+    low_boost_device = {
+        **SMART_HOMES[0]["zones"][0]["devices"][0],
+        "consigne_boost": "500",
+    }
+    homes = [
+        {
+            **SMART_HOMES[0],
+            "zones": [
+                {
+                    **SMART_HOMES[0]["zones"][0],
+                    "devices": [low_boost_device],
+                }
+            ],
+        }
+    ]
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(homes)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    mock_watts_client.async_set_temperature.reset_mock()
     entity_id = er.async_get(hass).async_get_entity_id(
-        Platform.CLIMATE, DOMAIN, "watts_thermostat_home-1#C001-000"
+        Platform.CLIMATE,
+        DOMAIN,
+        "watts_thermostat_home-1#C001-000",
     )
     assert entity_id is not None
 
     await hass.services.async_call(
         CLIMATE_DOMAIN,
-        SERVICE_SET_HVAC_MODE,
-        {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.AUTO},
+        SERVICE_SET_PRESET_MODE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: PRESET_BOOST},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_TEMPERATURE: 21},
         blocking=True,
     )
 
-    mock_watts_client.async_get_current_program_mode.assert_awaited_once()
+    assert mock_watts_client.async_set_temperature.await_args_list == [
+        call(
+            "home-1",
+            "api-device-1",
+            71.6,
+            WattsVisionDeviceMode.BOOST,
+            boost_duration=7200,
+        ),
+        call(
+            "home-1",
+            "api-device-1",
+            69.8,
+            WattsVisionDeviceMode.BOOST,
+            boost_duration=7200,
+        ),
+    ]
+
+
+async def test_boost_lifecycle_commands_are_explicit_and_turn_on_is_idempotent(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test Boost restart, exit, and on/off behavior through climate services."""
+    _ = setup_integration
+    entity_id = er.async_get(hass).async_get_entity_id(
+        Platform.CLIMATE,
+        DOMAIN,
+        "watts_thermostat_home-1#C001-000",
+    )
+    assert entity_id is not None
+
+    for service, data in (
+        (
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: PRESET_BOOST},
+        ),
+        (SERVICE_TURN_ON, {}),
+        (
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: PRESET_BOOST},
+        ),
+        (
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: PRESET_ECO},
+        ),
+        (
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: PRESET_BOOST},
+        ),
+        (
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: PRESET_DEFROST},
+        ),
+        (
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: PRESET_BOOST},
+        ),
+        (
+            SERVICE_SET_HVAC_MODE,
+            {ATTR_HVAC_MODE: HVACMode.AUTO},
+        ),
+        (
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: PRESET_BOOST},
+        ),
+        (SERVICE_TURN_OFF, {}),
+        (SERVICE_TURN_OFF, {}),
+    ):
+        await hass.services.async_call(
+            CLIMATE_DOMAIN,
+            service,
+            {ATTR_ENTITY_ID: entity_id, **data},
+            blocking=True,
+        )
+
+    assert mock_watts_client.async_set_temperature.await_args_list == [
+        call(
+            "home-1",
+            "api-device-1",
+            72.0,
+            WattsVisionDeviceMode.BOOST,
+            boost_duration=7200,
+        ),
+        call(
+            "home-1",
+            "api-device-1",
+            72.0,
+            WattsVisionDeviceMode.BOOST,
+            boost_duration=7200,
+        ),
+        call("home-1", "api-device-1", 62.0, WattsVisionDeviceMode.ECO),
+        call(
+            "home-1",
+            "api-device-1",
+            72.0,
+            WattsVisionDeviceMode.BOOST,
+            boost_duration=7200,
+        ),
+        call("home-1", "api-device-1", 44.6, WattsVisionDeviceMode.FROST),
+        call(
+            "home-1",
+            "api-device-1",
+            72.0,
+            WattsVisionDeviceMode.BOOST,
+            boost_duration=7200,
+        ),
+        call(
+            "home-1",
+            "api-device-1",
+            72.0,
+            WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
+        ),
+        call(
+            "home-1",
+            "api-device-1",
+            72.0,
+            WattsVisionDeviceMode.BOOST,
+            boost_duration=7200,
+        ),
+        call("home-1", "api-device-1", 0.0, WattsVisionDeviceMode.OFF),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("heat_cool", "air", "minimum", "maximum", "expected"),
+    [
+        ("0", "900", "500", "900", 90.0),
+        ("1", "500", "500", "900", 50.0),
+    ],
+    ids=("heating-at-maximum", "cooling-at-minimum"),
+)
+async def test_boost_respects_room_limit_when_demand_tick_is_impossible(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    mock_watts_client: MagicMock,
+    heat_cool: str,
+    air: str,
+    minimum: str,
+    maximum: str,
+    expected: float,
+) -> None:
+    """Test Boost clamps safely when the room is already at a reported limit."""
+    coordinator = setup_integration.runtime_data.coordinator
+    bounded_device = {
+        **SMART_HOMES[0]["zones"][0]["devices"][0],
+        "heat_cool": heat_cool,
+        "temperature_air": air,
+        "min_set_point": minimum,
+        "max_set_point": maximum,
+    }
+    homes = [
+        {
+            **SMART_HOMES[0],
+            "zones": [
+                {
+                    **SMART_HOMES[0]["zones"][0],
+                    "devices": [bounded_device],
+                }
+            ],
+        }
+    ]
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(homes)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    mock_watts_client.async_set_temperature.reset_mock()
+    entity_id = er.async_get(hass).async_get_entity_id(
+        Platform.CLIMATE,
+        DOMAIN,
+        "watts_thermostat_home-1#C001-000",
+    )
+    assert entity_id is not None
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_PRESET_MODE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: PRESET_BOOST},
+        blocking=True,
+    )
+
     mock_watts_client.async_set_temperature.assert_awaited_once_with(
         "home-1",
         "api-device-1",
-        72.0,
-        WattsVisionDeviceMode.PROGRAM_BOOST,
+        expected,
+        WattsVisionDeviceMode.BOOST,
+        boost_duration=7200,
+    )
+
+
+async def test_cooling_boost_requests_a_target_below_room_temperature(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test cooling Boost moves in the opposite direction from heating Boost."""
+    coordinator = setup_integration.runtime_data.coordinator
+    cooling_device = {
+        **SMART_HOMES[0]["zones"][0]["devices"][0],
+        "heat_cool": "1",
+        "consigne_confort": "752",
+        "consigne_boost": "770",
+    }
+    homes = [
+        {
+            **SMART_HOMES[0],
+            "zones": [
+                {
+                    **SMART_HOMES[0]["zones"][0],
+                    "devices": [cooling_device],
+                }
+            ],
+        }
+    ]
+    mock_watts_client.async_get_snapshot.return_value = snapshot_from_data(homes)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    mock_watts_client.async_set_temperature.reset_mock()
+    entity_id = er.async_get(hass).async_get_entity_id(
+        Platform.CLIMATE,
+        DOMAIN,
+        "watts_thermostat_home-1#C001-000",
+    )
+    assert entity_id is not None
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_PRESET_MODE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: PRESET_BOOST},
+        blocking=True,
+    )
+
+    mock_watts_client.async_set_temperature.assert_awaited_once_with(
+        "home-1",
+        "api-device-1",
+        70.7,
+        WattsVisionDeviceMode.BOOST,
+        boost_duration=7200,
     )
 
 
@@ -538,12 +780,12 @@ async def test_fahrenheit_configuration_is_converted_only_once(
     )
 
 
-async def test_turn_on_restores_mode_and_legacy_aliases_are_rejected(
+async def test_turn_on_restores_mode_and_rejects_nonstandard_preset_aliases(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
     mock_watts_client: MagicMock,
 ) -> None:
-    """Test restoration and removal of nonstandard Program/Off presets."""
+    """Test restoration and removal of pre-1.0 title-cased mode aliases."""
     _ = setup_integration
     entity_id = er.async_get(hass).async_get_entity_id(
         Platform.CLIMATE, DOMAIN, "watts_thermostat_home-1#C001-000"
@@ -553,7 +795,7 @@ async def test_turn_on_restores_mode_and_legacy_aliases_are_rejected(
     await hass.services.async_call(
         CLIMATE_DOMAIN,
         SERVICE_SET_PRESET_MODE,
-        {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: "Eco"},
+        {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: PRESET_ECO},
         blocking=True,
     )
     await hass.services.async_call(
@@ -568,7 +810,14 @@ async def test_turn_on_restores_mode_and_legacy_aliases_are_rejected(
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
-    for unsupported_preset in ("Program", "Off"):
+    for unsupported_preset in (
+        "Comfort",
+        "Eco",
+        "Frost Protection",
+        "Boost",
+        "Program",
+        "Off",
+    ):
         with pytest.raises(HomeAssistantError):
             await hass.services.async_call(
                 CLIMATE_DOMAIN,
@@ -618,8 +867,15 @@ async def test_frost_reports_fixed_target_and_rejects_temperature_write(
     assert entity_id is not None
     state = hass.states.get(entity_id)
     assert state is not None
-    assert state.attributes[ATTR_PRESET_MODE] == "Frost Protection"
+    assert state.attributes[ATTR_PRESET_MODE] == PRESET_DEFROST
     assert ATTR_TEMPERATURE not in state.attributes
+    assert state.attributes["min_temp"] == 10.0
+    assert state.attributes["max_temp"] == pytest.approx(32.2)
+    assert state.attributes["supported_features"] == (
+        ClimateEntityFeature.PRESET_MODE
+        | ClimateEntityFeature.TURN_OFF
+        | ClimateEntityFeature.TURN_ON
+    )
 
     with pytest.raises(HomeAssistantError):
         await hass.services.async_call(
@@ -662,7 +918,6 @@ async def test_turn_on_after_restart_falls_back_to_comfort(
             zone="Living room",
             parent_device_id=setup_integration.runtime_data.parent_device_ids["home-1"],
         ),
-        "api-device-1",
     )
 
     await thermostat.async_turn_on()
@@ -672,4 +927,46 @@ async def test_turn_on_after_restart_falls_back_to_comfort(
         "api-device-1",
         68.0,
         WattsVisionDeviceMode.COMFORT,
+    )
+
+
+async def test_turn_on_restores_program_as_generic_auto(
+    setup_integration: MockConfigEntry,
+    mock_watts_client: MagicMock,
+) -> None:
+    """Test a resolved Program phase is restored with schedule-safe mode 13."""
+    coordinator = setup_integration.runtime_data.coordinator
+    program_device = {
+        **SMART_HOMES[0]["zones"][0]["devices"][0],
+        "gv_mode": "8",
+    }
+    homes = [
+        {
+            **SMART_HOMES[0],
+            "zones": [
+                {
+                    **SMART_HOMES[0]["zones"][0],
+                    "devices": [program_device],
+                }
+            ],
+        }
+    ]
+    coordinator.async_set_updated_data(snapshot_from_data(homes))
+    thermostat = WattsThermostat(
+        coordinator,
+        WattsVisionEntityContext(
+            smart_home_id="home-1",
+            device_id="home-1#C001-000",
+            zone="Living room",
+            parent_device_id=setup_integration.runtime_data.parent_device_ids["home-1"],
+        ),
+    )
+
+    await thermostat.async_turn_on()
+
+    mock_watts_client.async_set_temperature.assert_awaited_once_with(
+        "home-1",
+        "api-device-1",
+        68.0,
+        WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
     )

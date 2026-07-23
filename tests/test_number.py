@@ -11,6 +11,7 @@ from homeassistant.components.climate import (
     SERVICE_SET_PRESET_MODE,
 )
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
+from homeassistant.components.climate.const import PRESET_BOOST
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.number import SERVICE_SET_VALUE
 from homeassistant.const import ATTR_ENTITY_ID, Platform
@@ -58,6 +59,7 @@ async def test_boost_duration_number_controls_boost_command(
     assert number_state.state == "120.0"
     assert number_state.attributes["min"] == MIN_BOOST_MINUTES
     assert number_state.attributes["max"] == MAX_BOOST_MINUTES
+    assert number_state.attributes["mode"] == "box"
 
     await hass.services.async_call(
         NUMBER_DOMAIN,
@@ -68,7 +70,7 @@ async def test_boost_duration_number_controls_boost_command(
     await hass.services.async_call(
         CLIMATE_DOMAIN,
         SERVICE_SET_PRESET_MODE,
-        {ATTR_ENTITY_ID: climate_entity_id, ATTR_PRESET_MODE: "Boost"},
+        {ATTR_ENTITY_ID: climate_entity_id, ATTR_PRESET_MODE: PRESET_BOOST},
         blocking=True,
     )
 
@@ -169,16 +171,24 @@ async def test_boost_durations_are_isolated_per_thermostat(
     await hass.async_block_till_done()
     registry = er.async_get(hass)
     first_number = registry.async_get_entity_id(
-        Platform.NUMBER, DOMAIN, "boost_duration_home-1#C001-000"
+        Platform.NUMBER,
+        DOMAIN,
+        "boost_duration_home-1#C001-000",
     )
     second_number = registry.async_get_entity_id(
-        Platform.NUMBER, DOMAIN, "boost_duration_home-1#C001-001"
+        Platform.NUMBER,
+        DOMAIN,
+        "boost_duration_home-1#C001-001",
     )
     first_climate = registry.async_get_entity_id(
-        Platform.CLIMATE, DOMAIN, "watts_thermostat_home-1#C001-000"
+        Platform.CLIMATE,
+        DOMAIN,
+        "watts_thermostat_home-1#C001-000",
     )
     second_climate = registry.async_get_entity_id(
-        Platform.CLIMATE, DOMAIN, "watts_thermostat_home-1#C001-001"
+        Platform.CLIMATE,
+        DOMAIN,
+        "watts_thermostat_home-1#C001-001",
     )
     assert first_number is not None
     assert second_number is not None
@@ -197,7 +207,7 @@ async def test_boost_durations_are_isolated_per_thermostat(
         await hass.services.async_call(
             CLIMATE_DOMAIN,
             SERVICE_SET_PRESET_MODE,
-            {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: "Boost"},
+            {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: PRESET_BOOST},
             blocking=True,
         )
 
