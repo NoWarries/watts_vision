@@ -972,11 +972,15 @@ async def test_turn_on_restores_program_as_generic_auto(
         ),
     )
 
+    await thermostat.async_turn_off()
     await thermostat.async_turn_on()
 
-    mock_watts_client.async_set_temperature.assert_awaited_once_with(
-        "home-1",
-        "api-device-1",
-        68.0,
-        WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
-    )
+    assert mock_watts_client.async_set_temperature.await_args_list == [
+        call("home-1", "api-device-1", 0.0, WattsVisionDeviceMode.OFF),
+        call(
+            "home-1",
+            "api-device-1",
+            68.0,
+            WattsVisionDeviceMode.PROGRAM_UNSPECIFIED,
+        ),
+    ]
