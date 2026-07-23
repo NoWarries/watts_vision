@@ -49,6 +49,9 @@ compatibility sensors are disabled by default.
 Commands are not instant. Home Assistant shows the requested state, then checks
 the Watts API until the thermostat reports the change.
 
+Boost uses the configured duration. Selecting Boost again or changing its
+target restarts the timer; changing **Next Boost duration** alone does not.
+Live checks confirmed natural expiry back to Comfort, Eco, and Auto. 
 ## For maintainers
 
 - [Home Assistant mapping](docs/home-assistant.md)

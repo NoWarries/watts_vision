@@ -54,11 +54,22 @@ correctly in cooling season.
 
 Changing the climate target while Boost is active sends a new Boost command and
 starts the configured duration again. Changing **Next Boost duration** alone
-does not alter a running Boost.
+does not alter a running Boost. Selecting Boost again also restarts it.
 
 Natural expiry returned to the pre-Boost mode in live tests from Comfort, Eco,
 and Program. Home Assistant does not send a fallback command when the timer
-ends.
+ends. Expiry from Frost and Off is not yet verified.
+
+| While Boost is active | Result |
+| --- | --- |
+| Select Comfort, Eco, Frost protection, Auto, or Off | Sends that mode and ends Boost. |
+| Set a target temperature | Replaces the target and restarts Boost. |
+| Select Boost again | Restarts Boost with the configured duration. |
+| Call `climate.turn_on` | No change; Boost keeps running. |
+| Change **Next Boost duration** | Changes the next Boost only. |
+
+At a reported room limit, the target is clamped to that limit. The room still
+enters Boost, but the integration cannot create heating or cooling demand.
 
 ## On and off
 
@@ -66,6 +77,9 @@ ends.
 Eco, Frost protection, or Program mode observed by that climate entity. If
 Home Assistant first discovers the room while it is already Off, `turn_on`
 falls back to Comfort because the earlier mode is unavailable.
+
+Both actions are idempotent. `turn_on` does nothing while the room is already
+on, and `turn_off` does nothing while it is already off.
 
 ## Command confirmation
 
@@ -99,12 +113,11 @@ differs from the requested state.
 | Air temperature sensor | Enabled | Recorder- and automation-friendly room temperature. |
 | Low battery binary sensor | Enabled | Diagnostic flag from `error_code == "1"`. |
 | Last communication sensor | Enabled | Diagnostic timestamp derived from `diffObj`. |
-| Next Boost duration number | Enabled | Local duration used by the next Boost request. |
+| Next Boost duration number | Enabled | Whole-minute box input used by the next Boost request. |
 | Heating binary sensor | Disabled | Duplicate of the reported climate action. |
 | Target temperature sensor | Disabled | Compatibility view of the active target. |
 | Preset and temperature-mode sensors | Disabled | Raw compatibility views for troubleshooting. |
 
 The activity fields have not been matched to a physical relay or boiler. Treat
 them as reported demand, not proof that equipment is running.
-
 

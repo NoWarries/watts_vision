@@ -18,14 +18,12 @@ from homeassistant.components.climate import (
     SERVICE_TURN_ON,
     HVACMode,
 )
-from homeassistant.components.climate import (
-    DOMAIN as CLIMATE_DOMAIN,
-)
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.climate.const import (
-    ClimateEntityFeature,
     PRESET_BOOST,
     PRESET_COMFORT,
     PRESET_ECO,
+    ClimateEntityFeature,
 )
 from homeassistant.const import ATTR_ENTITY_ID, Platform
 from homeassistant.exceptions import HomeAssistantError
@@ -50,6 +48,8 @@ from custom_components.watts_vision.entity import WattsVisionEntityContext
 from .conftest import SMART_HOMES, snapshot_from_data
 
 HALF_CELSIUS = 0.5
+MIN_ROOM_CELSIUS = 10.0
+MAX_ROOM_CELSIUS = 32.2
 
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
@@ -576,10 +576,26 @@ async def test_boost_lifecycle_commands_are_explicit_and_turn_on_is_idempotent(
 
 
 @pytest.mark.parametrize(
-    ("heat_cool", "air", "minimum", "maximum", "expected"),
+    ("device_overrides", "expected"),
     [
-        ("0", "900", "500", "900", 90.0),
-        ("1", "500", "500", "900", 50.0),
+        (
+            {
+                "heat_cool": "0",
+                "temperature_air": "900",
+                "min_set_point": "500",
+                "max_set_point": "900",
+            },
+            90.0,
+        ),
+        (
+            {
+                "heat_cool": "1",
+                "temperature_air": "500",
+                "min_set_point": "500",
+                "max_set_point": "900",
+            },
+            50.0,
+        ),
     ],
     ids=("heating-at-maximum", "cooling-at-minimum"),
 )
@@ -587,20 +603,14 @@ async def test_boost_respects_room_limit_when_demand_tick_is_impossible(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
     mock_watts_client: MagicMock,
-    heat_cool: str,
-    air: str,
-    minimum: str,
-    maximum: str,
+    device_overrides: dict[str, str],
     expected: float,
 ) -> None:
     """Test Boost clamps safely when the room is already at a reported limit."""
     coordinator = setup_integration.runtime_data.coordinator
     bounded_device = {
         **SMART_HOMES[0]["zones"][0]["devices"][0],
-        "heat_cool": heat_cool,
-        "temperature_air": air,
-        "min_set_point": minimum,
-        "max_set_point": maximum,
+        **device_overrides,
     }
     homes = [
         {
@@ -869,8 +879,8 @@ async def test_frost_reports_fixed_target_and_rejects_temperature_write(
     assert state is not None
     assert state.attributes[ATTR_PRESET_MODE] == PRESET_DEFROST
     assert ATTR_TEMPERATURE not in state.attributes
-    assert state.attributes["min_temp"] == 10.0
-    assert state.attributes["max_temp"] == pytest.approx(32.2)
+    assert state.attributes["min_temp"] == MIN_ROOM_CELSIUS
+    assert state.attributes["max_temp"] == pytest.approx(MAX_ROOM_CELSIUS)
     assert state.attributes["supported_features"] == (
         ClimateEntityFeature.PRESET_MODE
         | ClimateEntityFeature.TURN_OFF
